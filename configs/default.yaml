@@ -1,0 +1,23 @@
+sweep:
+  routing_policies:
+    - same_token
+    - attention_top1
+    - attention_topk
+    - attribution_topk
+  train_configs:
+    same_token: configs/experiment/train_baseline.yaml
+    attention_top1: configs/experiment/train_attention_top1.yaml
+    attention_topk: configs/experiment/train_attention_topk.yaml
+    attribution_topk: configs/experiment/train_attribution_topk.yaml
+  eval_config: configs/evaluation/{policy}_feature_eval.yaml
+  causal_config: configs/evaluation/{policy}_causal_restore.yaml
+  taxonomy_config: configs/evaluation/transport_taxonomy.yaml
+  case_studies_config: configs/evaluation/feature_case_studies.yaml
+
+routing:
+  enabled: false
+  policy: same_token
+  top_k: 1
+  normalize_weights: true
+  exclude_self: false
+  allow_negative_scores: false

@@ -1,0 +1,7 @@
+operator_path: outputs/train_attribution_topk/operator.npz
+pairs_path: outputs/attribution_topk/pairs.npz
+decoder_path: outputs/sae/mock_decoder.npz
+readout_path: outputs/readout/mock_readout.npz
+output_path: outputs/causal/attribution_topk_causal_restore.json
+split_name: test
+feature_ids: null

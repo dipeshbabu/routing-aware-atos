@@ -1,0 +1,7 @@
+operator_path: outputs/train_attention_top1/operator.npz
+pairs_path: outputs/attention_top1/pairs.npz
+decoder_path: outputs/sae/mock_decoder.npz
+readout_path: outputs/readout/mock_readout.npz
+output_path: outputs/causal/attention_top1_causal_restore.json
+split_name: test
+feature_ids: null

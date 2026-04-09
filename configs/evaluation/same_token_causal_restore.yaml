@@ -1,0 +1,7 @@
+operator_path: outputs/train_baseline/operator.npz
+pairs_path: outputs/same_token/pairs.npz
+decoder_path: outputs/sae/mock_decoder.npz
+readout_path: outputs/readout/mock_readout.npz
+output_path: outputs/causal/same_token_causal_restore.json
+split_name: test
+feature_ids: null

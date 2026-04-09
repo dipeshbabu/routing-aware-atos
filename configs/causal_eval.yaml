@@ -1,0 +1,8 @@
+causal_eval:
+  routing:
+    enabled: false
+    policy: same_token
+    top_k: 1
+    normalize_weights: true
+    exclude_self: false
+    allow_negative_scores: false

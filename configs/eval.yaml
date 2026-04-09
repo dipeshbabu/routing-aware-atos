@@ -1,0 +1,24 @@
+results_dir: outputs/evals
+
+routing:
+  enabled: false
+  policy: same_token
+  top_k: 1
+  normalize_weights: true
+  exclude_self: false
+  allow_negative_scores: false
+
+taxonomy_policies:
+  - same_token
+  - attention_top1
+  - attention_topk
+  - attribution_topk
+
+taxonomy:
+  same_token_policy: same_token
+  cross_token_policies:
+    - attention_top1
+  multi_source_policies:
+    - attention_topk
+    - attribution_topk
+  threshold: 0.7
