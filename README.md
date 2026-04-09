@@ -1,9 +1,6 @@
-# routing-aware-atos (Phase 1 and Phase 2)
+# routing-aware-atos
 
-This artifact implements the first two phases of the Routing Aware Activation Transport Operators project:
-
-- Phase 1: routing infrastructure
-- Phase 2: routed dataset construction
+This artifact implements Routing Aware Activation Transport Operators:
 
 It also includes a minimal baseline reproduction path for same-token ATO pair building so you can compare against the original Activation Transport Operators pipeline.
 
