@@ -1,0 +1,6 @@
+operator_path: outputs/train_attention_topk/operator.npz
+pairs_path: outputs/attention_topk/pairs.npz
+decoder_path: outputs/sae/mock_decoder.npz
+split_name: test
+output_path: outputs/evals/attention_topk_feature_eval.json
+feature_ids: [0, 1, 2, 3]

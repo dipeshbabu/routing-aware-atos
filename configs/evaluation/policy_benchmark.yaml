@@ -1,0 +1,15 @@
+output_dir: outputs/benchmarks
+bar_metric: mean_r2
+line_metric: mean_r2
+feature_ids: [0, 1, 2, 3]
+runs:
+  - policy_name: baseline_same_token
+    rank: null
+    operator_path: outputs/models/baseline/operator.npz
+    pairs_path: outputs/pairs/baseline_pairs.npz
+    decoder_path: outputs/sae/mock_decoder.npz
+  - policy_name: attention_topk
+    rank: 2
+    operator_path: outputs/models/routed/operator.npz
+    pairs_path: outputs/pairs/routed_pairs.npz
+    decoder_path: outputs/sae/mock_decoder.npz

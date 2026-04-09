@@ -1,0 +1,9 @@
+input_path: outputs/benchmarks/comparison.json
+rows_key: summary_rows
+group_key: policy_name
+metric_keys:
+  - mean_r2
+  - residual_r2
+baseline_policy: same_token
+summary_output_path: outputs/ablations/feature_ablation_summary.json
+delta_output_path: outputs/ablations/feature_ablation_deltas.json

@@ -1,0 +1,8 @@
+output_dir: outputs/paper_figures
+policy_comparison_path: outputs/benchmarks/comparison.json
+policy_bar_metric: mean_r2
+policy_line_metric: mean_r2
+causal_comparison_path: outputs/causal_benchmarks/causal_comparison.json
+causal_bar_metric: feature_mse_restoration
+causal_line_metric: feature_mse_restoration
+taxonomy_path: outputs/taxonomy/transport_taxonomy.json

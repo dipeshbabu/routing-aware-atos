@@ -1,0 +1,17 @@
+same_token_policy: same_token
+cross_token_policies:
+  - attention_top1
+multi_source_policies:
+  - attention_topk
+  - attribution_topk
+threshold: 0.7
+output_path: outputs/taxonomy/transport_taxonomy.json
+runs:
+  - policy_name: same_token
+    feature_eval_path: outputs/evals/same_token_feature_eval.json
+  - policy_name: attention_top1
+    feature_eval_path: outputs/evals/attention_top1_feature_eval.json
+  - policy_name: attention_topk
+    feature_eval_path: outputs/evals/attention_topk_feature_eval.json
+  - policy_name: attribution_topk
+    feature_eval_path: outputs/evals/attribution_topk_feature_eval.json

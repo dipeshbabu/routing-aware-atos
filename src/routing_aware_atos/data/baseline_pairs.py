@@ -40,3 +40,18 @@ class SameTokenBaselineBuilder:
                 )
 
         return np.stack(X_rows), np.stack(Y_rows), metadata
+
+
+def build_same_token_pairs(
+    samples: Iterable[CachedSample],
+    source_layer: int,
+    target_layer: int,
+    include_positions: Optional[List[int]] = None,
+) -> tuple[np.ndarray, np.ndarray, list[dict]]:
+    builder = SameTokenBaselineBuilder(
+        samples=samples,
+        source_layer=source_layer,
+        target_layer=target_layer,
+        include_positions=include_positions,
+    )
+    return builder.build_pairs()

@@ -1,0 +1,15 @@
+operator_path: outputs/models/baseline_operator.npz
+pairs_path: outputs/pairs/baseline_pairs.npz
+decoder_path: outputs/sae/mock_decoder.npz
+readout_path: outputs/readout/mock_readout.npz
+output_path: outputs/causal/causal_restore.json
+split_name: eval
+feature_ids: null
+
+routing:
+  enabled: false
+  policy: same_token
+  top_k: 1
+  normalize_weights: true
+  exclude_self: false
+  allow_negative_scores: false

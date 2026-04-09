@@ -1,0 +1,6 @@
+samples_path: outputs/attribution/mock_samples_with_attr.json
+output_path: outputs/attribution/route_comparison.json
+source_layer: 10
+target_layer: 12
+top_k: 3
+exclude_self: false

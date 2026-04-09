@@ -1,0 +1,10 @@
+input_path: outputs/causal_benchmarks/causal_comparison.json
+rows_key: summary_rows
+group_key: policy_name
+metric_keys:
+  - residual_mse_restoration
+  - feature_mse_restoration
+  - feature_mean_r2
+baseline_policy: same_token
+summary_output_path: outputs/ablations/causal_ablation_summary.json
+delta_output_path: outputs/ablations/causal_ablation_deltas.json

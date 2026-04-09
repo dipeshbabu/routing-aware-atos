@@ -1,0 +1,12 @@
+samples_path: outputs/mock_samples.json
+output_path: outputs/attribution/mock_samples_with_attr.json
+summary_path: outputs/attribution/summary.json
+layer_pairs:
+  - [10, 12]
+methods:
+  - attention_value
+  - residual_similarity
+  - attention_similarity_mix
+normalize_rows: true
+symmetrize_similarity: false
+include_existing: true

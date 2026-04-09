@@ -1,0 +1,17 @@
+output_dir: outputs/causal_benchmarks
+bar_metric: feature_mse_restoration
+line_metric: feature_mse_restoration
+feature_ids: null
+runs:
+  - policy_name: baseline_same_token
+    operator_path: outputs/models/baseline_operator.npz
+    pairs_path: outputs/pairs/baseline_pairs.npz
+    decoder_path: outputs/sae/mock_decoder.npz
+    readout_path: outputs/readout/mock_readout.npz
+    rank: null
+  - policy_name: routed_attention_topk
+    operator_path: outputs/models/ra_attention_topk_operator.npz
+    pairs_path: outputs/pairs/routed_attention_topk_pairs.npz
+    decoder_path: outputs/sae/mock_decoder.npz
+    readout_path: outputs/readout/mock_readout.npz
+    rank: null

@@ -1,0 +1,21 @@
+activation_dir_path:
+cache_path:
+output_dir: outputs/train_transport_operators
+include_positions:
+ridge_lambda: 0.01
+rank:
+num_samples: 3
+seq_len: 6
+d_model: 4
+
+experiment:
+  L: [10]
+  k: [2]
+
+routing:
+  enabled: false
+  policy: same_token
+  top_k: 1
+  normalize_weights: true
+  exclude_self: false
+  allow_negative_scores: false
