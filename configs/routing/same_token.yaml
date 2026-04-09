@@ -1,0 +1,7 @@
+source_layer: 10
+target_layer: 12
+routing_policy: same_token
+output_dir: outputs/same_token
+num_samples: 2
+seq_len: 6
+d_model: 4
