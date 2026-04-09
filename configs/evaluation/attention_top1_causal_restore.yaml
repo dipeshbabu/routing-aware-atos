@@ -1,7 +1,18 @@
 operator_path: outputs/train_attention_top1/operator.npz
-pairs_path: outputs/attention_top1/pairs.npz
-decoder_path: outputs/sae/mock_decoder.npz
-readout_path: outputs/readout/mock_readout.npz
+activation_dir_path: artifacts/gemma2_2b_slimpajama
+cache_path:
+source_layer: 10
+target_layer: 12
+decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+readout_path: artifacts/readout/gemma2_2b_readout.npz
 output_path: outputs/causal/attention_top1_causal_restore.json
 split_name: test
 feature_ids: null
+
+routing:
+  enabled: true
+  policy: attention_top1
+  top_k: 1
+  normalize_weights: true
+  exclude_self: false
+  allow_negative_scores: false

@@ -1,12 +1,15 @@
-operator_path: outputs/models/baseline/operator.npz
-pairs_path: outputs/pairs/baseline_pairs.npz
-decoder_path: outputs/sae/mock_decoder.npz
+operator_path: outputs/train_baseline/operator.npz
+activation_dir_path: artifacts/gemma2_2b_slimpajama
+cache_path:
+source_layer: 10
+target_layer: 12
+decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
 split_name: test
 output_path: outputs/evals/feature_eval.json
-feature_ids: [0, 1, 2, 3]
+feature_ids:
 
 routing:
-  enabled: false
+  enabled: true
   policy: same_token
   top_k: 1
   normalize_weights: true

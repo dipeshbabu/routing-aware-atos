@@ -10,6 +10,7 @@ if str(SRC_ROOT) not in sys.path:
 
 import argparse
 
+from routing_aware_atos.activation_loader import ActivationLoader
 from routing_aware_atos.data.mock_cache import make_mock_samples
 from routing_aware_atos.data.routed_dataset import RoutedActivationDataset
 from routing_aware_atos.routing.factory import build_routing_policy
@@ -22,15 +23,6 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
-    if cfg.get("cache_path"):
-        samples = load_cached_samples(cfg["cache_path"])
-    else:
-        samples = make_mock_samples(
-            num_samples=cfg.get("num_samples", 2),
-            seq_len=cfg.get("seq_len", 6),
-            d_model=cfg.get("d_model", 4),
-        )
-
     policy = build_routing_policy(
         cfg["routing_policy"],
         top_k=cfg.get("top_k", 1),
@@ -38,6 +30,25 @@ def main() -> None:
         exclude_self=cfg.get("exclude_self", False),
         allow_negative_scores=cfg.get("allow_negative_scores", False),
     )
+
+    if cfg.get("activation_dir_path"):
+        loader = ActivationLoader(activation_dir_path=cfg["activation_dir_path"])
+        samples = list(
+            loader.iter_cached_samples(
+                idx_list=cfg.get("idx_list"),
+                layer_indices=[cfg["source_layer"], cfg["target_layer"]],
+                attention_layer_pairs=[(cfg["source_layer"], cfg["target_layer"])] if policy.requires_attention else None,
+                attribution_layer_pairs=[(cfg["source_layer"], cfg["target_layer"])] if policy.requires_attribution else None,
+            )
+        )
+    elif cfg.get("cache_path"):
+        samples = load_cached_samples(cfg["cache_path"])
+    else:
+        samples = make_mock_samples(
+            num_samples=cfg.get("num_samples", 2),
+            seq_len=cfg.get("seq_len", 6),
+            d_model=cfg.get("d_model", 4),
+        )
 
     dataset = RoutedActivationDataset(
         samples=samples,

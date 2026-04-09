@@ -1,8 +1,13 @@
+activation_dir_path: artifacts/gemma2_2b_slimpajama
+cache_path:
+idx_list:
 source_layer: 10
 target_layer: 12
 routing_policy: attention_top1
+top_k: 1
 output_dir: outputs/attention_top1
 num_samples: 2
 seq_len: 6
 d_model: 4
 exclude_self: false
+normalize_weights: true

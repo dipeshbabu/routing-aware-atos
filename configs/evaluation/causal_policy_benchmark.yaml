@@ -3,15 +3,47 @@ bar_metric: feature_mse_restoration
 line_metric: feature_mse_restoration
 feature_ids: null
 runs:
-  - policy_name: baseline_same_token
-    operator_path: outputs/models/baseline_operator.npz
-    pairs_path: outputs/pairs/baseline_pairs.npz
-    decoder_path: outputs/sae/mock_decoder.npz
-    readout_path: outputs/readout/mock_readout.npz
+  - policy_name: same_token
+    operator_path: outputs/train_baseline/operator.npz
+    activation_dir_path: artifacts/gemma2_2b_slimpajama
+    source_layer: 10
+    target_layer: 12
+    decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+    readout_path: artifacts/readout/gemma2_2b_readout.npz
     rank: null
-  - policy_name: routed_attention_topk
-    operator_path: outputs/models/ra_attention_topk_operator.npz
-    pairs_path: outputs/pairs/routed_attention_topk_pairs.npz
-    decoder_path: outputs/sae/mock_decoder.npz
-    readout_path: outputs/readout/mock_readout.npz
+    routing:
+      policy: same_token
+      top_k: 1
+  - policy_name: attention_top1
+    operator_path: outputs/train_attention_top1/operator.npz
+    activation_dir_path: artifacts/gemma2_2b_slimpajama
+    source_layer: 10
+    target_layer: 12
+    decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+    readout_path: artifacts/readout/gemma2_2b_readout.npz
     rank: null
+    routing:
+      policy: attention_top1
+      top_k: 1
+  - policy_name: attention_topk
+    operator_path: outputs/train_attention_topk/operator.npz
+    activation_dir_path: artifacts/gemma2_2b_slimpajama
+    source_layer: 10
+    target_layer: 12
+    decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+    readout_path: artifacts/readout/gemma2_2b_readout.npz
+    rank: 2
+    routing:
+      policy: attention_topk
+      top_k: 3
+  - policy_name: attribution_topk
+    operator_path: outputs/train_attribution_topk/operator.npz
+    activation_dir_path: artifacts/gemma2_2b_slimpajama
+    source_layer: 10
+    target_layer: 12
+    decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+    readout_path: artifacts/readout/gemma2_2b_readout.npz
+    rank: 2
+    routing:
+      policy: attribution_topk
+      top_k: 3

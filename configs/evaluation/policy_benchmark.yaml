@@ -1,15 +1,45 @@
 output_dir: outputs/benchmarks
 bar_metric: mean_r2
 line_metric: mean_r2
-feature_ids: [0, 1, 2, 3]
+feature_ids: null
 runs:
-  - policy_name: baseline_same_token
+  - policy_name: same_token
     rank: null
-    operator_path: outputs/models/baseline/operator.npz
-    pairs_path: outputs/pairs/baseline_pairs.npz
-    decoder_path: outputs/sae/mock_decoder.npz
+    operator_path: outputs/train_baseline/operator.npz
+    activation_dir_path: artifacts/gemma2_2b_slimpajama
+    source_layer: 10
+    target_layer: 12
+    decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+    routing:
+      policy: same_token
+      top_k: 1
+  - policy_name: attention_top1
+    rank: null
+    operator_path: outputs/train_attention_top1/operator.npz
+    activation_dir_path: artifacts/gemma2_2b_slimpajama
+    source_layer: 10
+    target_layer: 12
+    decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+    routing:
+      policy: attention_top1
+      top_k: 1
   - policy_name: attention_topk
     rank: 2
-    operator_path: outputs/models/routed/operator.npz
-    pairs_path: outputs/pairs/routed_pairs.npz
-    decoder_path: outputs/sae/mock_decoder.npz
+    operator_path: outputs/train_attention_topk/operator.npz
+    activation_dir_path: artifacts/gemma2_2b_slimpajama
+    source_layer: 10
+    target_layer: 12
+    decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+    routing:
+      policy: attention_topk
+      top_k: 3
+  - policy_name: attribution_topk
+    rank: 2
+    operator_path: outputs/train_attribution_topk/operator.npz
+    activation_dir_path: artifacts/gemma2_2b_slimpajama
+    source_layer: 10
+    target_layer: 12
+    decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+    routing:
+      policy: attribution_topk
+      top_k: 3

@@ -1,3 +1,10 @@
+model:
+  family: gemma-2
+  name: gemma-2-2b
+  sae_family: gemma-scope
+  sae_release: gemma-scope-2b-pt-res-canonical
+  sae_site: residual_stream
+
 causal_eval:
   routing:
     enabled: false

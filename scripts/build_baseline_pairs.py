@@ -10,6 +10,7 @@ if str(SRC_ROOT) not in sys.path:
 
 import argparse
 
+from routing_aware_atos.activation_loader import ActivationLoader
 from routing_aware_atos.data.baseline_pairs import SameTokenBaselineBuilder
 from routing_aware_atos.data.mock_cache import make_mock_samples
 from routing_aware_atos.utils.io import load_cached_samples, load_yaml, save_json, save_npz
@@ -21,7 +22,15 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
-    if cfg.get("cache_path"):
+    if cfg.get("activation_dir_path"):
+        loader = ActivationLoader(activation_dir_path=cfg["activation_dir_path"])
+        samples = list(
+            loader.iter_cached_samples(
+                idx_list=cfg.get("idx_list"),
+                layer_indices=[cfg["source_layer"], cfg["target_layer"]],
+            )
+        )
+    elif cfg.get("cache_path"):
         samples = load_cached_samples(cfg["cache_path"])
     else:
         samples = make_mock_samples(

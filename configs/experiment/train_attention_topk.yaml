@@ -1,4 +1,6 @@
-
+activation_dir_path: artifacts/gemma2_2b_slimpajama
+cache_path:
+idx_list:
 source_layer: 10
 target_layer: 12
 routing_policy: attention_topk

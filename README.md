@@ -12,6 +12,12 @@ It supports:
 - feature case study export
 - full multi-policy experiment sweeps
 
+The intended real-model setup is:
+
+- base model: **Gemma 2 2B**
+- SAE family: **Gemma Scope**
+- default residual SAE release: **`gemma-scope-2b-pt-res-canonical`**
+
 ## Install
 
 ```bash
@@ -70,6 +76,26 @@ Run causal restoration:
 ```bash
 python scripts/run_causal_restore.py --config configs/evaluation/attention_topk_causal_restore.yaml
 ```
+
+## Gemma 2 2B + Gemma Scope Setup
+
+If you want to mirror the original paper setup more closely, use:
+
+- cached activations collected from **Gemma 2 2B**
+- residual-stream SAEs from **Gemma Scope**
+
+This repo expects SAE decoders in `.npz` format with a `decoder` array. You can export one from Gemma Scope with:
+
+```bash
+python scripts/export_gemma_scope_decoder.py \
+  --release gemma-scope-2b-pt-res-canonical \
+  --sae-id layer_20/width_16k/canonical \
+  --output outputs/sae/gemma_scope_layer20_width16k_decoder.npz
+```
+
+The script also writes a JSON sidecar with the release and SAE metadata.
+
+After that, point your eval / causal configs at the exported decoder instead of the mock decoder.
 
 ## Recommended Experiment Order
 
@@ -195,6 +221,7 @@ Evaluation configs:
 ## Notes
 
 - The root `eval.yaml` and `causal_eval.yaml` provide shared routing/taxonomy defaults.
+- The root configs now default to the **Gemma 2 2B + Gemma Scope** target setup as metadata, but the repo still remains model-agnostic at runtime until you provide real cached activations, a real decoder export, and a real readout export.
 - The taxonomy builder accepts either:
   - explicit `runs:` payloads, or
   - `results_dir` plus `taxonomy_policies`

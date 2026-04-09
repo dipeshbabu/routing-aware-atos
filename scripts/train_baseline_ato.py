@@ -11,6 +11,7 @@ if str(SRC_ROOT) not in sys.path:
 
 import argparse
 
+from routing_aware_atos.activation_loader import ActivationLoader
 from routing_aware_atos.data.baseline_pairs import SameTokenBaselineBuilder
 from routing_aware_atos.data.mock_cache import make_mock_samples
 from routing_aware_atos.models.transport_operator import TransportOperator, TransportOperatorConfig
@@ -28,7 +29,15 @@ def main() -> None:
         X, Y = arrays["X"], arrays["Y"]
         pair_metadata = {"pairs_path": cfg["pairs_path"]}
     else:
-        if cfg.get("cache_path"):
+        if cfg.get("activation_dir_path"):
+            loader = ActivationLoader(activation_dir_path=cfg["activation_dir_path"])
+            samples = list(
+                loader.iter_cached_samples(
+                    idx_list=cfg.get("idx_list"),
+                    layer_indices=[cfg["source_layer"], cfg["target_layer"]],
+                )
+            )
+        elif cfg.get("cache_path"):
             samples = load_cached_samples(cfg["cache_path"])
         else:
             samples = make_mock_samples(
@@ -48,6 +57,10 @@ def main() -> None:
             "target_layer": cfg["target_layer"],
             "num_rows": int(X.shape[0]),
         }
+        if cfg.get("activation_dir_path"):
+            pair_metadata["activation_dir_path"] = cfg["activation_dir_path"]
+        if cfg.get("cache_path"):
+            pair_metadata["cache_path"] = cfg["cache_path"]
 
     operator = TransportOperator(
         config=TransportOperatorConfig(

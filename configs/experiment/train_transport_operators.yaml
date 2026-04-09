@@ -1,5 +1,6 @@
-activation_dir_path:
+activation_dir_path: artifacts/gemma2_2b_slimpajama
 cache_path:
+idx_list:
 output_dir: outputs/train_transport_operators
 include_positions:
 ridge_lambda: 0.01

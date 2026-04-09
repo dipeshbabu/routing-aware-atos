@@ -11,6 +11,7 @@ if str(SRC_ROOT) not in sys.path:
 
 import argparse
 
+from routing_aware_atos.activation_loader import ActivationLoader
 from routing_aware_atos.data.mock_cache import make_mock_samples
 from routing_aware_atos.data.routed_dataset import RoutedActivationDataset, summarize_routes
 from routing_aware_atos.models.routed_transport_operator import RoutedTransportOperator
@@ -30,7 +31,24 @@ def main() -> None:
         arrays = load_npz(cfg["pairs_path"])
         X, Y = arrays["X"], arrays["Y"]
     else:
-        if cfg.get("cache_path"):
+        policy = build_routing_policy(
+            cfg["routing_policy"],
+            top_k=cfg.get("top_k", 1),
+            normalize_weights=cfg.get("normalize_weights", True),
+            exclude_self=cfg.get("exclude_self", False),
+            allow_negative_scores=cfg.get("allow_negative_scores", False),
+        )
+        if cfg.get("activation_dir_path"):
+            loader = ActivationLoader(activation_dir_path=cfg["activation_dir_path"])
+            samples = list(
+                loader.iter_cached_samples(
+                    idx_list=cfg.get("idx_list"),
+                    layer_indices=[cfg["source_layer"], cfg["target_layer"]],
+                    attention_layer_pairs=[(cfg["source_layer"], cfg["target_layer"])] if policy.requires_attention else None,
+                    attribution_layer_pairs=[(cfg["source_layer"], cfg["target_layer"])] if policy.requires_attribution else None,
+                )
+            )
+        elif cfg.get("cache_path"):
             samples = load_cached_samples(cfg["cache_path"])
         else:
             samples = make_mock_samples(
@@ -39,13 +57,6 @@ def main() -> None:
                 d_model=cfg.get("d_model", 4),
             )
 
-        policy = build_routing_policy(
-            cfg["routing_policy"],
-            top_k=cfg.get("top_k", 1),
-            normalize_weights=cfg.get("normalize_weights", True),
-            exclude_self=cfg.get("exclude_self", False),
-            allow_negative_scores=cfg.get("allow_negative_scores", False),
-        )
         dataset = RoutedActivationDataset(
             samples=samples,
             source_layer=cfg["source_layer"],
@@ -76,6 +87,8 @@ def main() -> None:
             "source_layer": cfg.get("source_layer"),
             "target_layer": cfg.get("target_layer"),
             "routing_policy": cfg.get("routing_policy"),
+            "activation_dir_path": cfg.get("activation_dir_path"),
+            "cache_path": cfg.get("cache_path"),
         },
     )
     print(f"Saved routed operator -> {out_dir}")
