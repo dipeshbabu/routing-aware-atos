@@ -1,0 +1,5 @@
+operator_path: outputs/train_baseline/operator.npz
+pairs_path: outputs/baseline_pairs/pairs.npz
+rank: null
+eps: 1.0e-8
+output_path: outputs/evals/transport_efficiency.json

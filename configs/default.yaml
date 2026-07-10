@@ -8,13 +8,21 @@ model:
 sweep:
   routing_policies:
     - same_token
+    - previous_token
     - attention_top1
     - attention_topk
+    - attention_topk_concat
+    - random_topk
+    - shuffled_attention_topk
     - attribution_topk
   train_configs:
     same_token: configs/experiment/train_baseline.yaml
+    previous_token: configs/experiment/train_previous_token.yaml
     attention_top1: configs/experiment/train_attention_top1.yaml
     attention_topk: configs/experiment/train_attention_topk.yaml
+    attention_topk_concat: configs/experiment/train_attention_topk_concat.yaml
+    random_topk: configs/experiment/train_random_topk.yaml
+    shuffled_attention_topk: configs/experiment/train_shuffled_attention_topk.yaml
     attribution_topk: configs/experiment/train_attribution_topk.yaml
   eval_config: configs/evaluation/{policy}_feature_eval.yaml
   causal_config: configs/evaluation/{policy}_causal_restore.yaml

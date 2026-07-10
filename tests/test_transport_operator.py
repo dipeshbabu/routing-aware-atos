@@ -25,3 +25,16 @@ def test_transport_operator_rank_truncation_reduces_effective_rank():
 
     op = TransportOperator(TransportOperatorConfig(ridge_lambda=1e-6, rank=2)).fit(X, Y)
     assert np.linalg.matrix_rank(op.weight) <= 2
+
+
+def test_transport_operator_supports_rectangular_input_output_dims():
+    rng = np.random.default_rng(2)
+    X = rng.normal(size=(80, 8)).astype(np.float32)
+    W = rng.normal(size=(8, 3)).astype(np.float32)
+    Y = X @ W
+
+    op = TransportOperator(TransportOperatorConfig(ridge_lambda=1e-6)).fit(X, Y)
+    pred = op.predict(X)
+
+    assert pred.shape == Y.shape
+    assert op.evaluate(X, Y)["r2"] > 0.999

@@ -1,0 +1,19 @@
+operator_path: outputs/train_attention_topk_concat/operator.npz
+activation_dir_path: artifacts/gemma2_2b_slimpajama
+cache_path:
+source_layer: 10
+target_layer: 12
+decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+split_name: test
+output_path: outputs/evals/attention_topk_concat_feature_eval.json
+feature_ids:
+
+routing:
+  enabled: true
+  policy: attention_topk
+  top_k: 3
+  input_mode: concat
+  max_sources: 3
+  normalize_weights: true
+  exclude_self: false
+  allow_negative_scores: false

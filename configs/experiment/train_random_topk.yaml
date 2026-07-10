@@ -1,0 +1,16 @@
+activation_dir_path: artifacts/gemma2_2b_slimpajama
+cache_path:
+idx_list:
+source_layer: 10
+target_layer: 12
+routing_policy: random_topk
+top_k: 3
+random_seed: 0
+normalize_weights: true
+exclude_self: false
+output_dir: outputs/train_random_topk
+num_samples: 3
+seq_len: 6
+d_model: 4
+ridge_lambda: 0.01
+rank: 2

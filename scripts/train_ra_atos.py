@@ -13,7 +13,7 @@ import argparse
 
 from routing_aware_atos.activation_loader import ActivationLoader
 from routing_aware_atos.data.mock_cache import make_mock_samples
-from routing_aware_atos.data.routed_dataset import RoutedActivationDataset, summarize_routes
+from routing_aware_atos.data.routed_dataset import ConcatenatedRoutedActivationDataset, RoutedActivationDataset, summarize_routes
 from routing_aware_atos.models.routed_transport_operator import RoutedTransportOperator
 from routing_aware_atos.models.transport_operator import TransportOperatorConfig
 from routing_aware_atos.routing.factory import build_routing_policy
@@ -37,6 +37,7 @@ def main() -> None:
             normalize_weights=cfg.get("normalize_weights", True),
             exclude_self=cfg.get("exclude_self", False),
             allow_negative_scores=cfg.get("allow_negative_scores", False),
+            random_seed=cfg.get("random_seed", 0),
         )
         if cfg.get("activation_dir_path"):
             loader = ActivationLoader(activation_dir_path=cfg["activation_dir_path"])
@@ -57,13 +58,26 @@ def main() -> None:
                 d_model=cfg.get("d_model", 4),
             )
 
-        dataset = RoutedActivationDataset(
-            samples=samples,
-            source_layer=cfg["source_layer"],
-            target_layer=cfg["target_layer"],
-            routing_policy=policy,
-            include_positions=cfg.get("include_positions"),
-        )
+        input_mode = cfg.get("input_mode", "weighted_sum")
+        if input_mode == "concat":
+            dataset = ConcatenatedRoutedActivationDataset(
+                samples=samples,
+                source_layer=cfg["source_layer"],
+                target_layer=cfg["target_layer"],
+                routing_policy=policy,
+                max_sources=cfg.get("max_sources", cfg.get("top_k", 1)),
+                include_positions=cfg.get("include_positions"),
+            )
+        elif input_mode == "weighted_sum":
+            dataset = RoutedActivationDataset(
+                samples=samples,
+                source_layer=cfg["source_layer"],
+                target_layer=cfg["target_layer"],
+                routing_policy=policy,
+                include_positions=cfg.get("include_positions"),
+            )
+        else:
+            raise ValueError(f"Unknown input_mode {input_mode!r}")
         pairs = dataset.build_pairs()
         X, Y = pairs.X, pairs.Y
         route_summary = summarize_routes(pairs.routes)
@@ -87,6 +101,8 @@ def main() -> None:
             "source_layer": cfg.get("source_layer"),
             "target_layer": cfg.get("target_layer"),
             "routing_policy": cfg.get("routing_policy"),
+            "input_mode": cfg.get("input_mode", "weighted_sum"),
+            "max_sources": cfg.get("max_sources", cfg.get("top_k", 1)),
             "activation_dir_path": cfg.get("activation_dir_path"),
             "cache_path": cfg.get("cache_path"),
         },

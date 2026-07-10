@@ -2,6 +2,10 @@ output_dir: outputs/benchmarks
 bar_metric: mean_r2
 line_metric: mean_r2
 feature_ids: null
+n_bootstrap: 1000
+confidence: 0.95
+random_seed: 0
+baseline_policy: same_token
 runs:
   - policy_name: same_token
     rank: null
@@ -12,6 +16,16 @@ runs:
     decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
     routing:
       policy: same_token
+      top_k: 1
+  - policy_name: previous_token
+    rank: 2
+    operator_path: outputs/train_previous_token/operator.npz
+    activation_dir_path: artifacts/gemma2_2b_slimpajama
+    source_layer: 10
+    target_layer: 12
+    decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+    routing:
+      policy: previous_token
       top_k: 1
   - policy_name: attention_top1
     rank: null
@@ -33,6 +47,40 @@ runs:
     routing:
       policy: attention_topk
       top_k: 3
+  - policy_name: attention_topk_concat
+    rank: 2
+    operator_path: outputs/train_attention_topk_concat/operator.npz
+    activation_dir_path: artifacts/gemma2_2b_slimpajama
+    source_layer: 10
+    target_layer: 12
+    decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+    routing:
+      policy: attention_topk
+      top_k: 3
+      input_mode: concat
+      max_sources: 3
+  - policy_name: random_topk
+    rank: 2
+    operator_path: outputs/train_random_topk/operator.npz
+    activation_dir_path: artifacts/gemma2_2b_slimpajama
+    source_layer: 10
+    target_layer: 12
+    decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+    routing:
+      policy: random_topk
+      top_k: 3
+      random_seed: 0
+  - policy_name: shuffled_attention_topk
+    rank: 2
+    operator_path: outputs/train_shuffled_attention_topk/operator.npz
+    activation_dir_path: artifacts/gemma2_2b_slimpajama
+    source_layer: 10
+    target_layer: 12
+    decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+    routing:
+      policy: shuffled_attention_topk
+      top_k: 3
+      random_seed: 0
   - policy_name: attribution_topk
     rank: 2
     operator_path: outputs/train_attribution_topk/operator.npz

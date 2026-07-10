@@ -1,0 +1,11 @@
+model_name: google/gemma-2-2b
+prompts_path: data/prompts.txt
+output_path: artifacts/gemma2_2b_cached_samples.json
+device: cuda
+dtype: bfloat16
+max_length: 256
+layer_indices:
+  - 10
+  - 12
+attention_layer_pairs:
+  - [10, 12]

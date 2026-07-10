@@ -7,3 +7,10 @@ from routing_aware_atos.evaluation.causal_restore import compare_causal_policy_r
 from routing_aware_atos.evaluation.transport_taxonomy import build_transport_taxonomy, classify_feature_transport
 
 from routing_aware_atos.evaluation.paper_figures import generate_paper_figures
+
+from routing_aware_atos.evaluation.transport_efficiency import (
+    canonical_correlations,
+    compute_transport_efficiency,
+    evaluate_operator_transport_efficiency,
+    transport_r2_ceiling,
+)

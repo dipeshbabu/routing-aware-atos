@@ -15,6 +15,7 @@ class RoutingPolicyConfig:
     normalize_weights: bool = True
     exclude_self: bool = False
     allow_negative_scores: bool = False
+    random_seed: int = 0
 
 
 class RoutingPolicy(ABC):
@@ -90,6 +91,33 @@ class RoutingPolicy(ABC):
 
         return chosen_idx.astype(int), weights.astype(float)
 
+    def _valid_source_indices(self, sample: CachedSample, target_pos: int) -> np.ndarray:
+        indices = np.arange(sample.seq_len, dtype=int)
+        if self.config.exclude_self and 0 <= target_pos < sample.seq_len:
+            indices = indices[indices != target_pos]
+        if indices.size == 0:
+            raise ValueError("No valid source indices available after masking")
+        return indices
+
+    def _deterministic_rng(
+        self,
+        sample: CachedSample,
+        target_pos: int,
+        source_layer: int,
+        target_layer: int,
+    ) -> np.random.Generator:
+        sample_idx = 0
+        if sample.metadata and "sample_idx" in sample.metadata:
+            sample_idx = int(sample.metadata["sample_idx"])
+        seed = (
+            int(self.config.random_seed) * 1_000_003
+            + sample_idx * 100_003
+            + int(target_pos) * 10_007
+            + int(source_layer) * 503
+            + int(target_layer) * 97
+        ) % (2**32)
+        return np.random.default_rng(seed)
+
 
 class SameTokenPolicy(RoutingPolicy):
     name = "same_token"
@@ -112,6 +140,107 @@ class SameTokenPolicy(RoutingPolicy):
             source_ids=[int(target_pos)],
             source_weights=[1.0],
             score_type="same_token",
+        )
+
+
+class PreviousTokenPolicy(RoutingPolicy):
+    name = "previous_token"
+
+    def select_sources(
+        self,
+        sample: CachedSample,
+        target_pos: int,
+        source_layer: int,
+        target_layer: int,
+    ) -> RouteSelection:
+        sample.validate()
+        if target_pos < 0 or target_pos >= sample.seq_len:
+            raise IndexError(f"target_pos={target_pos} out of bounds for seq_len={sample.seq_len}")
+        source_pos = max(0, target_pos - 1)
+        if self.config.exclude_self and source_pos == target_pos:
+            candidates = self._valid_source_indices(sample, target_pos)
+            source_pos = int(candidates[0])
+        return RouteSelection(
+            source_ids=[int(source_pos)],
+            source_weights=[1.0],
+            score_type="previous_token",
+        )
+
+
+class NextTokenPolicy(RoutingPolicy):
+    name = "next_token"
+
+    def select_sources(
+        self,
+        sample: CachedSample,
+        target_pos: int,
+        source_layer: int,
+        target_layer: int,
+    ) -> RouteSelection:
+        sample.validate()
+        if target_pos < 0 or target_pos >= sample.seq_len:
+            raise IndexError(f"target_pos={target_pos} out of bounds for seq_len={sample.seq_len}")
+        source_pos = min(sample.seq_len - 1, target_pos + 1)
+        if self.config.exclude_self and source_pos == target_pos:
+            candidates = self._valid_source_indices(sample, target_pos)
+            source_pos = int(candidates[-1])
+        return RouteSelection(
+            source_ids=[int(source_pos)],
+            source_weights=[1.0],
+            score_type="next_token",
+        )
+
+
+class UniformTopKPolicy(RoutingPolicy):
+    name = "uniform_topk"
+
+    def select_sources(
+        self,
+        sample: CachedSample,
+        target_pos: int,
+        source_layer: int,
+        target_layer: int,
+    ) -> RouteSelection:
+        sample.validate()
+        candidates = self._valid_source_indices(sample, target_pos)
+        k = min(int(self.config.top_k), len(candidates))
+        if k <= 0:
+            raise ValueError(f"top_k must be positive, got {self.config.top_k}")
+        if k == len(candidates):
+            chosen = candidates
+        else:
+            positions = np.linspace(0, len(candidates) - 1, num=k)
+            chosen = candidates[np.rint(positions).astype(int)]
+        weights = np.ones(k, dtype=np.float64) / float(k)
+        return RouteSelection(
+            source_ids=[int(x) for x in chosen],
+            source_weights=weights.tolist(),
+            score_type="uniform_topk",
+        )
+
+
+class RandomTopKPolicy(RoutingPolicy):
+    name = "random_topk"
+
+    def select_sources(
+        self,
+        sample: CachedSample,
+        target_pos: int,
+        source_layer: int,
+        target_layer: int,
+    ) -> RouteSelection:
+        sample.validate()
+        candidates = self._valid_source_indices(sample, target_pos)
+        k = min(int(self.config.top_k), len(candidates))
+        if k <= 0:
+            raise ValueError(f"top_k must be positive, got {self.config.top_k}")
+        rng = self._deterministic_rng(sample, target_pos, source_layer, target_layer)
+        chosen = np.sort(rng.choice(candidates, size=k, replace=False))
+        weights = np.ones(k, dtype=np.float64) / float(k)
+        return RouteSelection(
+            source_ids=[int(x) for x in chosen],
+            source_weights=weights.tolist(),
+            score_type="random_topk",
         )
 
 
@@ -182,6 +311,39 @@ class AttentionTopKPolicy(RoutingPolicy):
         )
 
 
+class ShuffledAttentionTopKPolicy(RoutingPolicy):
+    name = "shuffled_attention_topk"
+    requires_attention = True
+
+    def select_sources(
+        self,
+        sample: CachedSample,
+        target_pos: int,
+        source_layer: int,
+        target_layer: int,
+    ) -> RouteSelection:
+        sample.validate()
+
+        if sample.attention_scores is None:
+            raise ValueError("ShuffledAttentionTopKPolicy requires attention_scores in sample")
+
+        key = (source_layer, target_layer)
+        if key not in sample.attention_scores:
+            raise KeyError(f"Missing attention score matrix for key {key}")
+
+        score_matrix = sample.attention_scores[key]
+        score_vector = np.asarray(score_matrix[target_pos], dtype=np.float64)
+        rng = self._deterministic_rng(sample, target_pos, source_layer, target_layer)
+        shuffled_scores = score_vector[rng.permutation(len(score_vector))]
+
+        idx, weights = self._take_topk(score_vector=shuffled_scores, target_pos=target_pos)
+        return RouteSelection(
+            source_ids=idx.tolist(),
+            source_weights=weights.tolist(),
+            score_type="shuffled_attention_topk",
+        )
+
+
 class AttributionTopKPolicy(RoutingPolicy):
     name = "attribution_topk"
     requires_attribution = True
@@ -219,8 +381,13 @@ def build_routing_policy(name: str, **kwargs: object) -> RoutingPolicy:
     config = RoutingPolicyConfig(**kwargs)
     registry = {
         "same_token": SameTokenPolicy,
+        "previous_token": PreviousTokenPolicy,
+        "next_token": NextTokenPolicy,
+        "uniform_topk": UniformTopKPolicy,
+        "random_topk": RandomTopKPolicy,
         "attention_top1": AttentionTop1Policy,
         "attention_topk": AttentionTopKPolicy,
+        "shuffled_attention_topk": ShuffledAttentionTopKPolicy,
         "attribution_topk": AttributionTopKPolicy,
     }
     if name not in registry:
@@ -231,8 +398,13 @@ __all__ = [
     "AttentionTop1Policy",
     "AttentionTopKPolicy",
     "AttributionTopKPolicy",
+    "NextTokenPolicy",
+    "PreviousTokenPolicy",
+    "RandomTopKPolicy",
     "RoutingPolicy",
     "RoutingPolicyConfig",
     "SameTokenPolicy",
+    "ShuffledAttentionTopKPolicy",
+    "UniformTopKPolicy",
     "build_routing_policy",
 ]

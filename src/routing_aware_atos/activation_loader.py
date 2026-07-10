@@ -315,7 +315,7 @@ class ActivationLoader:
 
             return out
 
-        sample = self.load_cached_sample(sample_idx)
+        sample = (self._samples or [])[sample_idx]
         return {
             "attention_scores": sorted(
                 [f"attention_layer_{key[1]}" for key in (sample.attention_scores or {}).keys()]
@@ -530,11 +530,11 @@ class ActivationLoader:
         if scores is None:
             return None
         if layer_pairs is None:
-            return {tuple(k): np.asarray(v, dtype=np.float32) for k, v in scores.items()}
+            return None
 
         selected = {}
         for pair in layer_pairs:
             if pair not in scores:
                 raise KeyError(f"Missing score matrix for layer pair {pair}")
             selected[tuple(pair)] = np.asarray(scores[pair], dtype=np.float32)
-        return selected
+        return selected or None

@@ -8,7 +8,7 @@ import numpy as np
 from routing_aware_atos.activation_loader import ActivationLoader
 from routing_aware_atos.data.mock_cache import make_mock_samples
 from routing_aware_atos.models.transport_operator import TransportOperator
-from routing_aware_atos.routed_dataset import build_routed_pairs, summarize_routes
+from routing_aware_atos.routed_dataset import build_concatenated_routed_pairs, build_routed_pairs, summarize_routes
 from routing_aware_atos.routing_policies import build_routing_policy
 from routing_aware_atos.sae.feature_metrics import evaluate_feature_space, summarize_feature_metrics
 from routing_aware_atos.utils.io import load_npz, save_json
@@ -191,6 +191,9 @@ def evaluate_causal_restoration_from_cached_samples(
     normalize_weights: bool = True,
     exclude_self: bool = False,
     allow_negative_scores: bool = False,
+    random_seed: int = 0,
+    input_mode: str = "weighted_sum",
+    max_sources: int | None = None,
     include_positions: list[int] | None = None,
     readout_path: str | Path | None = None,
     feature_ids: Iterable[int] | None = None,
@@ -209,6 +212,7 @@ def evaluate_causal_restoration_from_cached_samples(
         normalize_weights=normalize_weights,
         exclude_self=exclude_self,
         allow_negative_scores=allow_negative_scores,
+        random_seed=random_seed,
     )
 
     if activation_dir_path:
@@ -236,18 +240,31 @@ def evaluate_causal_restoration_from_cached_samples(
     else:
         samples = make_mock_samples(num_samples=num_samples, seq_len=seq_len, d_model=d_model)
 
-    routed_pairs = build_routed_pairs(
-        samples=samples,
-        source_layer=source_layer,
-        target_layer=target_layer,
-        routing_policy=policy,
-        include_positions=include_positions,
-    )
+    if input_mode == "concat":
+        routed_pairs = build_concatenated_routed_pairs(
+            samples=samples,
+            source_layer=source_layer,
+            target_layer=target_layer,
+            routing_policy=policy,
+            max_sources=max_sources or top_k,
+            include_positions=include_positions,
+        )
+    elif input_mode == "weighted_sum":
+        routed_pairs = build_routed_pairs(
+            samples=samples,
+            source_layer=source_layer,
+            target_layer=target_layer,
+            routing_policy=policy,
+            include_positions=include_positions,
+        )
+    else:
+        raise ValueError(f"Unknown input_mode {input_mode!r}")
     routed_pairs.validate()
     route_summary = summarize_routes(routed_pairs.routes)
     routing_info = {
         "routing_enabled": True,
         "routing_policy": routing_policy,
+        "input_mode": input_mode,
         "route_summary": route_summary,
     }
     return _evaluate_causal_arrays(
@@ -297,6 +314,9 @@ def compare_causal_policy_runs(
                 normalize_weights=routing_cfg.get("normalize_weights", True),
                 exclude_self=routing_cfg.get("exclude_self", False),
                 allow_negative_scores=routing_cfg.get("allow_negative_scores", False),
+                random_seed=routing_cfg.get("random_seed", 0),
+                input_mode=routing_cfg.get("input_mode", "weighted_sum"),
+                max_sources=routing_cfg.get("max_sources"),
                 include_positions=run.get("include_positions"),
                 readout_path=run.get("readout_path"),
                 feature_ids=feature_ids,

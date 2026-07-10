@@ -6,8 +6,11 @@ It supports:
 
 - same-token baseline ATO training
 - routing-aware operator training with `same_token`, `attention_top1`, `attention_topk`, and `attribution_topk`
+- control routing policies: `previous_token`, `next_token`, `uniform_topk`, `random_topk`, and `shuffled_attention_topk`
+- multi-source concatenated inputs for top-k routes via `input_mode: concat`
 - feature-space evaluation
 - causal restoration evaluation
+- live model causal restoration utilities for logit / KL / next-token loss recovery
 - transport taxonomy generation
 - feature case study export
 - full multi-policy experiment sweeps
@@ -27,6 +30,12 @@ pip install -e .
 ```
 
 If you already have the local repo environment, use that instead.
+
+Optional real-model collection dependencies:
+
+```bash
+pip install -e ".[real-model]"
+```
 
 ## Core Data Model
 
@@ -51,6 +60,9 @@ Build routed pairs:
 
 ```bash
 python scripts/build_routed_pairs.py --config configs/routing/attention_topk.yaml
+python scripts/build_routed_pairs.py --config configs/routing/random_topk.yaml
+python scripts/build_routed_pairs.py --config configs/routing/shuffled_attention_topk.yaml
+python scripts/build_routed_pairs.py --config configs/routing/attention_topk_concat.yaml
 ```
 
 Train a same-token baseline operator:
@@ -63,12 +75,19 @@ Train a routed operator:
 
 ```bash
 python scripts/train_ra_atos.py --config configs/experiment/train_attention_topk.yaml
+python scripts/train_ra_atos.py --config configs/experiment/train_attention_topk_concat.yaml
 ```
 
 Evaluate in feature space:
 
 ```bash
 python scripts/eval_feature_space.py --config configs/evaluation/attention_topk_feature_eval.yaml
+```
+
+Evaluate transport efficiency / CCA ceiling:
+
+```bash
+python scripts/eval_transport_efficiency.py --config configs/evaluation/transport_efficiency.yaml
 ```
 
 Run causal restoration:
@@ -83,6 +102,12 @@ If you want to mirror the original paper setup more closely, use:
 
 - cached activations collected from **Gemma 2 2B**
 - residual-stream SAEs from **Gemma Scope**
+
+Collect Hugging Face residual / attention caches:
+
+```bash
+python scripts/collect_hf_activations.py --config configs/collection/hf_gemma2_2b.yaml
+```
 
 This repo expects SAE decoders in `.npz` format with a `decoder` array. You can export one from Gemma Scope with:
 
@@ -115,6 +140,10 @@ Routed:
 python scripts/build_routed_pairs.py --config configs/routing/attention_top1.yaml
 python scripts/build_routed_pairs.py --config configs/routing/attention_topk.yaml
 python scripts/build_routed_pairs.py --config configs/routing/attribution_topk.yaml
+python scripts/build_routed_pairs.py --config configs/routing/previous_token.yaml
+python scripts/build_routed_pairs.py --config configs/routing/random_topk.yaml
+python scripts/build_routed_pairs.py --config configs/routing/shuffled_attention_topk.yaml
+python scripts/build_routed_pairs.py --config configs/routing/attention_topk_concat.yaml
 ```
 
 ### 2. Train operators
@@ -137,6 +166,10 @@ Attention top-1 / top-k / attribution top-k:
 python scripts/train_ra_atos.py --config configs/experiment/train_attention_top1.yaml
 python scripts/train_ra_atos.py --config configs/experiment/train_attention_topk.yaml
 python scripts/train_ra_atos.py --config configs/experiment/train_attribution_topk.yaml
+python scripts/train_ra_atos.py --config configs/experiment/train_previous_token.yaml
+python scripts/train_ra_atos.py --config configs/experiment/train_random_topk.yaml
+python scripts/train_ra_atos.py --config configs/experiment/train_shuffled_attention_topk.yaml
+python scripts/train_ra_atos.py --config configs/experiment/train_attention_topk_concat.yaml
 ```
 
 ### 3. Feature-space evaluation
@@ -148,7 +181,15 @@ python scripts/eval_feature_space.py --config configs/evaluation/attention_topk_
 python scripts/eval_feature_space.py --config configs/evaluation/attribution_topk_feature_eval.yaml
 ```
 
-### 4. Causal restoration evaluation
+### 4. Transport efficiency / LTS estimate
+
+```bash
+python scripts/eval_transport_efficiency.py --config configs/evaluation/transport_efficiency.yaml
+```
+
+This computes the CCA R2 ceiling, ATO R2 in whitened target space, efficiency ratio, and effective dimensionality estimate used for the linear transport subspace analysis.
+
+### 5. Causal restoration evaluation
 
 ```bash
 python scripts/run_causal_restore.py --config configs/evaluation/same_token_causal_restore.yaml
@@ -157,7 +198,7 @@ python scripts/run_causal_restore.py --config configs/evaluation/attention_topk_
 python scripts/run_causal_restore.py --config configs/evaluation/attribution_topk_causal_restore.yaml
 ```
 
-### 5. Build taxonomy and case studies
+### 6. Build taxonomy and case studies
 
 Using the dedicated configs:
 

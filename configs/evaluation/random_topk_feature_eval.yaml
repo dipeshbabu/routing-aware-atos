@@ -1,0 +1,18 @@
+operator_path: outputs/train_random_topk/operator.npz
+activation_dir_path: artifacts/gemma2_2b_slimpajama
+cache_path:
+source_layer: 10
+target_layer: 12
+decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+split_name: test
+output_path: outputs/evals/random_topk_feature_eval.json
+feature_ids:
+
+routing:
+  enabled: true
+  policy: random_topk
+  top_k: 3
+  random_seed: 0
+  normalize_weights: true
+  exclude_self: false
+  allow_negative_scores: false

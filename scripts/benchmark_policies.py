@@ -21,7 +21,14 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
-    payload = compare_policy_runs(cfg['runs'], feature_ids=cfg.get('feature_ids'))
+    payload = compare_policy_runs(
+        cfg['runs'],
+        feature_ids=cfg.get('feature_ids'),
+        n_bootstrap=cfg.get("n_bootstrap", 1000),
+        confidence=cfg.get("confidence", 0.95),
+        random_seed=cfg.get("random_seed", 0),
+        baseline_policy=cfg.get("baseline_policy"),
+    )
 
     output_dir = Path(cfg.get('output_dir', 'outputs/benchmarks'))
     output_dir.mkdir(parents=True, exist_ok=True)

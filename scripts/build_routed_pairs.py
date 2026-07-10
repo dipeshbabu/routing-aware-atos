@@ -12,7 +12,7 @@ import argparse
 
 from routing_aware_atos.activation_loader import ActivationLoader
 from routing_aware_atos.data.mock_cache import make_mock_samples
-from routing_aware_atos.data.routed_dataset import RoutedActivationDataset
+from routing_aware_atos.data.routed_dataset import ConcatenatedRoutedActivationDataset, RoutedActivationDataset
 from routing_aware_atos.routing.factory import build_routing_policy
 from routing_aware_atos.utils.io import load_cached_samples, load_yaml, save_json, save_npz
 
@@ -29,6 +29,7 @@ def main() -> None:
         normalize_weights=cfg.get("normalize_weights", True),
         exclude_self=cfg.get("exclude_self", False),
         allow_negative_scores=cfg.get("allow_negative_scores", False),
+        random_seed=cfg.get("random_seed", 0),
     )
 
     if cfg.get("activation_dir_path"):
@@ -50,20 +51,33 @@ def main() -> None:
             d_model=cfg.get("d_model", 4),
         )
 
-    dataset = RoutedActivationDataset(
-        samples=samples,
-        source_layer=cfg["source_layer"],
-        target_layer=cfg["target_layer"],
-        routing_policy=policy,
-        include_positions=cfg.get("include_positions"),
-    )
+    input_mode = cfg.get("input_mode", "weighted_sum")
+    if input_mode == "concat":
+        dataset = ConcatenatedRoutedActivationDataset(
+            samples=samples,
+            source_layer=cfg["source_layer"],
+            target_layer=cfg["target_layer"],
+            routing_policy=policy,
+            max_sources=cfg.get("max_sources", cfg.get("top_k", 1)),
+            include_positions=cfg.get("include_positions"),
+        )
+    elif input_mode == "weighted_sum":
+        dataset = RoutedActivationDataset(
+            samples=samples,
+            source_layer=cfg["source_layer"],
+            target_layer=cfg["target_layer"],
+            routing_policy=policy,
+            include_positions=cfg.get("include_positions"),
+        )
+    else:
+        raise ValueError(f"Unknown input_mode {input_mode!r}")
     pairs = dataset.build_pairs()
 
     out_dir = Path(cfg.get("output_dir", f"outputs/{policy.name}"))
     save_npz(out_dir / "pairs.npz", X=pairs.X, Y=pairs.Y)
     save_json(out_dir / "routes.json", pairs.routes)
 
-    print(f"Saved routed pairs with policy={policy.name}: X{pairs.X.shape}, Y{pairs.Y.shape} -> {out_dir}")
+    print(f"Saved routed pairs with policy={policy.name}, input_mode={input_mode}: X{pairs.X.shape}, Y{pairs.Y.shape} -> {out_dir}")
 
 
 if __name__ == "__main__":

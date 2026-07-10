@@ -18,41 +18,20 @@ from routing_aware_atos.data.baseline_pairs import SameTokenBaselineBuilder
 from routing_aware_atos.data.mock_cache import make_mock_samples
 from routing_aware_atos.models.routed_transport_operator import RoutedTransportOperator
 from routing_aware_atos.models.transport_operator import TransportOperator, TransportOperatorConfig
-from routing_aware_atos.routed_dataset import build_routed_pairs, summarize_routes
-from routing_aware_atos.routing_policies import (
-    AttentionTop1Policy,
-    AttentionTopKPolicy,
-    AttributionTopKPolicy,
-    RoutingPolicyConfig,
-    SameTokenPolicy,
-)
+from routing_aware_atos.routed_dataset import build_concatenated_routed_pairs, build_routed_pairs, summarize_routes
+from routing_aware_atos.routing_policies import build_routing_policy
 from routing_aware_atos.utils.io import load_npz, load_yaml, save_json
 
 
 def _build_routing_policy(cfg: dict[str, Any]):
     routing_cfg = cfg["routing"]
-    policy_name = str(routing_cfg["policy"])
-
-    policy_config = RoutingPolicyConfig(
+    return build_routing_policy(
+        str(routing_cfg["policy"]),
         top_k=int(routing_cfg.get("top_k", 1)),
         normalize_weights=bool(routing_cfg.get("normalize_weights", True)),
         exclude_self=bool(routing_cfg.get("exclude_self", False)),
         allow_negative_scores=bool(routing_cfg.get("allow_negative_scores", False)),
-    )
-
-    if policy_name == "same_token":
-        return SameTokenPolicy(policy_config)
-    if policy_name == "attention_top1":
-        policy_config.top_k = 1
-        return AttentionTop1Policy(policy_config)
-    if policy_name == "attention_topk":
-        return AttentionTopKPolicy(policy_config)
-    if policy_name == "attribution_topk":
-        return AttributionTopKPolicy(policy_config)
-
-    raise ValueError(
-        f"Unsupported routing policy: {policy_name!r}. "
-        "Choose from same_token, attention_top1, attention_topk, attribution_topk."
+        random_seed=int(routing_cfg.get("random_seed", 0)),
     )
 
 
@@ -99,6 +78,36 @@ def _evaluate_xy(transport_operator: TransportOperator, X: np.ndarray, Y: np.nda
         "rmse": rmse,
         "r2_score": r2,
     }
+
+
+def _build_pairs_for_mode(
+    samples,
+    *,
+    source_layer: int,
+    target_layer: int,
+    routing_policy,
+    cfg: dict[str, Any],
+):
+    routing_cfg = cfg.get("routing", {})
+    input_mode = routing_cfg.get("input_mode", cfg.get("input_mode", "weighted_sum"))
+    if input_mode == "concat":
+        return build_concatenated_routed_pairs(
+            samples=samples,
+            source_layer=source_layer,
+            target_layer=target_layer,
+            routing_policy=routing_policy,
+            max_sources=int(routing_cfg.get("max_sources", routing_cfg.get("top_k", 1))),
+            include_positions=cfg.get("include_positions"),
+        )
+    if input_mode == "weighted_sum":
+        return build_routed_pairs(
+            samples=samples,
+            source_layer=source_layer,
+            target_layer=target_layer,
+            routing_policy=routing_policy,
+            include_positions=cfg.get("include_positions"),
+        )
+    raise ValueError(f"Unknown input_mode {input_mode!r}")
 
 
 def _load_loader_or_samples(cfg: dict[str, Any]):
@@ -196,26 +205,26 @@ def main() -> None:
                     val_samples = all_samples
                     test_samples = all_samples
 
-                train_pairs = build_routed_pairs(
+                train_pairs = _build_pairs_for_mode(
                     samples=train_samples,
                     source_layer=int(source_layer),
                     target_layer=target_layer,
                     routing_policy=routing_policy,
-                    include_positions=cfg.get("include_positions"),
+                    cfg=cfg,
                 )
-                val_pairs = build_routed_pairs(
+                val_pairs = _build_pairs_for_mode(
                     samples=val_samples,
                     source_layer=int(source_layer),
                     target_layer=target_layer,
                     routing_policy=routing_policy,
-                    include_positions=cfg.get("include_positions"),
+                    cfg=cfg,
                 )
-                test_pairs = build_routed_pairs(
+                test_pairs = _build_pairs_for_mode(
                     samples=test_samples,
                     source_layer=int(source_layer),
                     target_layer=target_layer,
                     routing_policy=routing_policy,
-                    include_positions=cfg.get("include_positions"),
+                    cfg=cfg,
                 )
                 X, Y = train_pairs.X, train_pairs.Y
                 route_summary = summarize_routes(train_pairs.routes)
@@ -255,6 +264,7 @@ def main() -> None:
                 "target_layer": int(target_layer),
                 "routing_enabled": routing_enabled,
                 "routing_policy": routing_policy.name if routing_enabled else "same_token",
+                "input_mode": cfg.get("routing", {}).get("input_mode", cfg.get("input_mode", "weighted_sum")),
                 "train_shape": [int(X.shape[0]), int(X.shape[1])],
                 "route_summary": route_summary,
             }

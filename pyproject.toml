@@ -20,6 +20,10 @@ dependencies = [
 gemma-scope = [
   "sae-lens>=5.0.0",
 ]
+real-model = [
+  "transformers>=4.44",
+  "accelerate>=0.33",
+]
 test = [
   "pytest>=8.0",
 ]

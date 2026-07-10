@@ -30,6 +30,9 @@ def test_compare_policy_runs(tmp_path):
             'decoder_path': str(decoder_path),
         })
 
-    payload = compare_policy_runs(runs)
+    payload = compare_policy_runs(runs, n_bootstrap=50, baseline_policy="policy_0")
     assert len(payload['summary_rows']) == 2
     assert payload['summary_rows'][0]['mean_r2'] <= 1.0
+    assert "mean_r2_ci_low" in payload["summary_rows"][0]
+    assert "mean_corr_ci_high" in payload["summary_rows"][0]
+    assert len(payload["delta_rows"]) == 2

@@ -1,0 +1,17 @@
+operator_path: outputs/train_previous_token/operator.npz
+activation_dir_path: artifacts/gemma2_2b_slimpajama
+cache_path:
+source_layer: 10
+target_layer: 12
+decoder_path: artifacts/sae/gemma_scope_layer12_width16k_decoder.npz
+split_name: test
+output_path: outputs/evals/previous_token_feature_eval.json
+feature_ids:
+
+routing:
+  enabled: true
+  policy: previous_token
+  top_k: 1
+  normalize_weights: true
+  exclude_self: false
+  allow_negative_scores: false

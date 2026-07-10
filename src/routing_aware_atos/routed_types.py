@@ -118,13 +118,11 @@ class RoutedPairs:
             raise ValueError(
                 f"RoutedPairs expects 2D arrays, got X{self.X.shape}, Y{self.Y.shape}"
             )
+        if self.X.shape[1] == 0 or self.Y.shape[1] == 0:
+            raise ValueError(f"X and Y must have non-empty feature dimensions, got X{self.X.shape}, Y{self.Y.shape}")
         if self.X.shape[0] != self.Y.shape[0]:
             raise ValueError(
                 f"X and Y must have same number of rows, got {self.X.shape[0]} vs {self.Y.shape[0]}"
-            )
-        if self.X.shape[1] != self.Y.shape[1]:
-            raise ValueError(
-                f"X and Y must have same feature dimension, got {self.X.shape[1]} vs {self.Y.shape[1]}"
             )
         if len(self.routes) != self.X.shape[0]:
             raise ValueError(

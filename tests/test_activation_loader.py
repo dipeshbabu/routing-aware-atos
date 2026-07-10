@@ -20,6 +20,9 @@ def test_activation_loader_loads_sample_subsets(tmp_path: Path):
     assert set(sample.attention_scores) == {(10, 12)}
     assert sample.attribution_scores is None
 
+    sample_empty = loader.load_cached_sample(0, layers=[10], attribution_layer_pairs=[])
+    assert sample_empty.attribution_scores is None
+
 
 def test_activation_loader_iterates_in_memory_samples():
     samples = make_mock_samples(num_samples=3, seq_len=5, d_model=2)
