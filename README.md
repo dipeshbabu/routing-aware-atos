@@ -24,17 +24,31 @@ The intended real-model setup is:
 ## Install
 
 ```bash
-python -m venv .routing
-.routing\Scripts\activate
-pip install -e .
+uv sync
 ```
 
-If you already have the local repo environment, use that instead.
+Install test dependencies:
+
+```bash
+uv sync --extra test
+```
 
 Optional real-model collection dependencies:
 
 ```bash
-pip install -e ".[real-model]"
+uv sync --extra real-model
+```
+
+For the full research environment:
+
+```bash
+uv sync --extra test --extra real-model --extra gemma-scope
+```
+
+Run tests:
+
+```bash
+uv run pytest -q
 ```
 
 ## Core Data Model
@@ -53,47 +67,47 @@ The matrix row for target position `i` contains source-token routing scores for 
 Build baseline pairs:
 
 ```bash
-python scripts/build_baseline_pairs.py --config configs/routing/same_token.yaml
+uv run python scripts/build_baseline_pairs.py --config configs/routing/same_token.yaml
 ```
 
 Build routed pairs:
 
 ```bash
-python scripts/build_routed_pairs.py --config configs/routing/attention_topk.yaml
-python scripts/build_routed_pairs.py --config configs/routing/random_topk.yaml
-python scripts/build_routed_pairs.py --config configs/routing/shuffled_attention_topk.yaml
-python scripts/build_routed_pairs.py --config configs/routing/attention_topk_concat.yaml
+uv run python scripts/build_routed_pairs.py --config configs/routing/attention_topk.yaml
+uv run python scripts/build_routed_pairs.py --config configs/routing/random_topk.yaml
+uv run python scripts/build_routed_pairs.py --config configs/routing/shuffled_attention_topk.yaml
+uv run python scripts/build_routed_pairs.py --config configs/routing/attention_topk_concat.yaml
 ```
 
 Train a same-token baseline operator:
 
 ```bash
-python scripts/train_baseline_ato.py --config configs/experiment/train_baseline.yaml
+uv run python scripts/train_baseline_ato.py --config configs/experiment/train_baseline.yaml
 ```
 
 Train a routed operator:
 
 ```bash
-python scripts/train_ra_atos.py --config configs/experiment/train_attention_topk.yaml
-python scripts/train_ra_atos.py --config configs/experiment/train_attention_topk_concat.yaml
+uv run python scripts/train_ra_atos.py --config configs/experiment/train_attention_topk.yaml
+uv run python scripts/train_ra_atos.py --config configs/experiment/train_attention_topk_concat.yaml
 ```
 
 Evaluate in feature space:
 
 ```bash
-python scripts/eval_feature_space.py --config configs/evaluation/attention_topk_feature_eval.yaml
+uv run python scripts/eval_feature_space.py --config configs/evaluation/attention_topk_feature_eval.yaml
 ```
 
 Evaluate transport efficiency / CCA ceiling:
 
 ```bash
-python scripts/eval_transport_efficiency.py --config configs/evaluation/transport_efficiency.yaml
+uv run python scripts/eval_transport_efficiency.py --config configs/evaluation/transport_efficiency.yaml
 ```
 
 Run causal restoration:
 
 ```bash
-python scripts/run_causal_restore.py --config configs/evaluation/attention_topk_causal_restore.yaml
+uv run python scripts/run_causal_restore.py --config configs/evaluation/attention_topk_causal_restore.yaml
 ```
 
 ## Gemma 2 2B + Gemma Scope Setup
@@ -106,13 +120,13 @@ If you want to mirror the original paper setup more closely, use:
 Collect Hugging Face residual / attention caches:
 
 ```bash
-python scripts/collect_hf_activations.py --config configs/collection/hf_gemma2_2b.yaml
+uv run python scripts/collect_hf_activations.py --config configs/collection/hf_gemma2_2b.yaml
 ```
 
 This repo expects SAE decoders in `.npz` format with a `decoder` array. You can export one from Gemma Scope with:
 
 ```bash
-python scripts/export_gemma_scope_decoder.py \
+uv run python scripts/export_gemma_scope_decoder.py \
   --release gemma-scope-2b-pt-res-canonical \
   --sae-id layer_20/width_16k/canonical \
   --output outputs/sae/gemma_scope_layer20_width16k_decoder.npz
@@ -131,19 +145,19 @@ This repo does not use the original ATO repo entry points like `collect_activati
 Baseline:
 
 ```bash
-python scripts/build_baseline_pairs.py --config configs/routing/same_token.yaml
+uv run python scripts/build_baseline_pairs.py --config configs/routing/same_token.yaml
 ```
 
 Routed:
 
 ```bash
-python scripts/build_routed_pairs.py --config configs/routing/attention_top1.yaml
-python scripts/build_routed_pairs.py --config configs/routing/attention_topk.yaml
-python scripts/build_routed_pairs.py --config configs/routing/attribution_topk.yaml
-python scripts/build_routed_pairs.py --config configs/routing/previous_token.yaml
-python scripts/build_routed_pairs.py --config configs/routing/random_topk.yaml
-python scripts/build_routed_pairs.py --config configs/routing/shuffled_attention_topk.yaml
-python scripts/build_routed_pairs.py --config configs/routing/attention_topk_concat.yaml
+uv run python scripts/build_routed_pairs.py --config configs/routing/attention_top1.yaml
+uv run python scripts/build_routed_pairs.py --config configs/routing/attention_topk.yaml
+uv run python scripts/build_routed_pairs.py --config configs/routing/attribution_topk.yaml
+uv run python scripts/build_routed_pairs.py --config configs/routing/previous_token.yaml
+uv run python scripts/build_routed_pairs.py --config configs/routing/random_topk.yaml
+uv run python scripts/build_routed_pairs.py --config configs/routing/shuffled_attention_topk.yaml
+uv run python scripts/build_routed_pairs.py --config configs/routing/attention_topk_concat.yaml
 ```
 
 ### 2. Train operators
@@ -151,40 +165,40 @@ python scripts/build_routed_pairs.py --config configs/routing/attention_topk_con
 Baseline:
 
 ```bash
-python scripts/train_baseline_ato.py --config configs/experiment/train_baseline.yaml
+uv run python scripts/train_baseline_ato.py --config configs/experiment/train_baseline.yaml
 ```
 
 Same-token through the routed stack:
 
 ```bash
-python scripts/train_ra_atos.py --config configs/experiment/train_same_token_routed.yaml
+uv run python scripts/train_ra_atos.py --config configs/experiment/train_same_token_routed.yaml
 ```
 
 Attention top-1 / top-k / attribution top-k:
 
 ```bash
-python scripts/train_ra_atos.py --config configs/experiment/train_attention_top1.yaml
-python scripts/train_ra_atos.py --config configs/experiment/train_attention_topk.yaml
-python scripts/train_ra_atos.py --config configs/experiment/train_attribution_topk.yaml
-python scripts/train_ra_atos.py --config configs/experiment/train_previous_token.yaml
-python scripts/train_ra_atos.py --config configs/experiment/train_random_topk.yaml
-python scripts/train_ra_atos.py --config configs/experiment/train_shuffled_attention_topk.yaml
-python scripts/train_ra_atos.py --config configs/experiment/train_attention_topk_concat.yaml
+uv run python scripts/train_ra_atos.py --config configs/experiment/train_attention_top1.yaml
+uv run python scripts/train_ra_atos.py --config configs/experiment/train_attention_topk.yaml
+uv run python scripts/train_ra_atos.py --config configs/experiment/train_attribution_topk.yaml
+uv run python scripts/train_ra_atos.py --config configs/experiment/train_previous_token.yaml
+uv run python scripts/train_ra_atos.py --config configs/experiment/train_random_topk.yaml
+uv run python scripts/train_ra_atos.py --config configs/experiment/train_shuffled_attention_topk.yaml
+uv run python scripts/train_ra_atos.py --config configs/experiment/train_attention_topk_concat.yaml
 ```
 
 ### 3. Feature-space evaluation
 
 ```bash
-python scripts/eval_feature_space.py --config configs/evaluation/same_token_feature_eval.yaml
-python scripts/eval_feature_space.py --config configs/evaluation/attention_top1_feature_eval.yaml
-python scripts/eval_feature_space.py --config configs/evaluation/attention_topk_feature_eval.yaml
-python scripts/eval_feature_space.py --config configs/evaluation/attribution_topk_feature_eval.yaml
+uv run python scripts/eval_feature_space.py --config configs/evaluation/same_token_feature_eval.yaml
+uv run python scripts/eval_feature_space.py --config configs/evaluation/attention_top1_feature_eval.yaml
+uv run python scripts/eval_feature_space.py --config configs/evaluation/attention_topk_feature_eval.yaml
+uv run python scripts/eval_feature_space.py --config configs/evaluation/attribution_topk_feature_eval.yaml
 ```
 
 ### 4. Transport efficiency / LTS estimate
 
 ```bash
-python scripts/eval_transport_efficiency.py --config configs/evaluation/transport_efficiency.yaml
+uv run python scripts/eval_transport_efficiency.py --config configs/evaluation/transport_efficiency.yaml
 ```
 
 This computes the CCA R2 ceiling, ATO R2 in whitened target space, efficiency ratio, and effective dimensionality estimate used for the linear transport subspace analysis.
@@ -192,10 +206,10 @@ This computes the CCA R2 ceiling, ATO R2 in whitened target space, efficiency ra
 ### 5. Causal restoration evaluation
 
 ```bash
-python scripts/run_causal_restore.py --config configs/evaluation/same_token_causal_restore.yaml
-python scripts/run_causal_restore.py --config configs/evaluation/attention_top1_causal_restore.yaml
-python scripts/run_causal_restore.py --config configs/evaluation/attention_topk_causal_restore.yaml
-python scripts/run_causal_restore.py --config configs/evaluation/attribution_topk_causal_restore.yaml
+uv run python scripts/run_causal_restore.py --config configs/evaluation/same_token_causal_restore.yaml
+uv run python scripts/run_causal_restore.py --config configs/evaluation/attention_top1_causal_restore.yaml
+uv run python scripts/run_causal_restore.py --config configs/evaluation/attention_topk_causal_restore.yaml
+uv run python scripts/run_causal_restore.py --config configs/evaluation/attribution_topk_causal_restore.yaml
 ```
 
 ### 6. Build taxonomy and case studies
@@ -203,15 +217,15 @@ python scripts/run_causal_restore.py --config configs/evaluation/attribution_top
 Using the dedicated configs:
 
 ```bash
-python scripts/build_transport_taxonomy.py --config configs/evaluation/transport_taxonomy.yaml
-python scripts/export_feature_case_studies.py --config configs/evaluation/feature_case_studies.yaml
+uv run python scripts/build_transport_taxonomy.py --config configs/evaluation/transport_taxonomy.yaml
+uv run python scripts/export_feature_case_studies.py --config configs/evaluation/feature_case_studies.yaml
 ```
 
 Or using the root eval config:
 
 ```bash
-python scripts/build_transport_taxonomy.py --config configs/eval.yaml
-python scripts/export_feature_case_studies.py --config configs/eval.yaml
+uv run python scripts/build_transport_taxonomy.py --config configs/eval.yaml
+uv run python scripts/export_feature_case_studies.py --config configs/eval.yaml
 ```
 
 ## Full Sweep
@@ -219,7 +233,7 @@ python scripts/export_feature_case_studies.py --config configs/eval.yaml
 Run the full multi-policy workflow with:
 
 ```bash
-python scripts/run_full_routing_sweep.py --config configs/default.yaml
+uv run python scripts/run_full_routing_sweep.py --config configs/default.yaml
 ```
 
 That script resolves per-policy configs for:
