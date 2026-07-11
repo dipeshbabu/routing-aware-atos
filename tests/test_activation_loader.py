@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from routing_aware_atos.activation_loader import ActivationLoader
 from routing_aware_atos.data.mock_cache import make_mock_samples
@@ -40,3 +41,16 @@ def test_activation_loader_returns_attention_matrix():
     matrix = loader.get_attention_matrix(0, 10, 12)
     assert matrix.shape == (4, 4)
     assert np.allclose(matrix.sum(axis=1), 1.0)
+
+
+def test_activation_loader_strict_iteration_propagates_sample_errors(monkeypatch):
+    samples = make_mock_samples(num_samples=1, seq_len=4, d_model=2)
+    loader = ActivationLoader(samples=samples)
+
+    def fail(*args, **kwargs):
+        raise KeyError("corrupt sample")
+
+    monkeypatch.setattr(loader, "get_cached_sample", fail)
+    assert list(loader.iter_cached_samples(layer_indices=[10])) == []
+    with pytest.raises(KeyError, match="corrupt sample"):
+        list(loader.iter_cached_samples(layer_indices=[10], strict=True))

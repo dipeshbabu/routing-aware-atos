@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 import numpy as np
 import torch
@@ -19,7 +19,11 @@ def _extract_logits(model_output: Any) -> torch.Tensor:
     raise TypeError(f"Cannot extract logits from output type {type(model_output)}")
 
 
-def next_token_cross_entropy(logits: torch.Tensor, input_ids: torch.Tensor) -> float:
+def next_token_cross_entropy(
+    logits: torch.Tensor,
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor | None = None,
+) -> float:
     if logits.ndim != 3:
         raise ValueError(f"logits must have shape [batch, seq, vocab], got {tuple(logits.shape)}")
     if input_ids.ndim != 2:
@@ -30,23 +34,52 @@ def next_token_cross_entropy(logits: torch.Tensor, input_ids: torch.Tensor) -> f
         return 0.0
     pred = logits[:, :-1, :].contiguous()
     labels = input_ids[:, 1:].contiguous()
-    return float(F.cross_entropy(pred.view(-1, pred.shape[-1]), labels.view(-1)).detach().cpu())
+    losses = F.cross_entropy(
+        pred.view(-1, pred.shape[-1]),
+        labels.view(-1),
+        reduction="none",
+    ).reshape_as(labels)
+    if attention_mask is not None:
+        if attention_mask.shape != input_ids.shape:
+            raise ValueError("attention_mask must match input_ids")
+        valid = attention_mask[:, 1:].to(device=losses.device, dtype=torch.bool)
+        if not valid.any():
+            return 0.0
+        losses = losses[valid]
+    return float(losses.mean().detach().cpu())
 
 
-def mean_token_kl(reference_logits: torch.Tensor, candidate_logits: torch.Tensor) -> float:
+def mean_token_kl(
+    reference_logits: torch.Tensor,
+    candidate_logits: torch.Tensor,
+    attention_mask: torch.Tensor | None = None,
+) -> float:
     if reference_logits.shape != candidate_logits.shape:
         raise ValueError(f"logit shapes differ: {tuple(reference_logits.shape)} vs {tuple(candidate_logits.shape)}")
     ref_log_probs = F.log_softmax(reference_logits, dim=-1)
     cand_log_probs = F.log_softmax(candidate_logits, dim=-1)
     ref_probs = ref_log_probs.exp()
-    kl = ref_probs * (ref_log_probs - cand_log_probs)
-    return float(kl.sum(dim=-1).mean().detach().cpu())
+    kl = (ref_probs * (ref_log_probs - cand_log_probs)).sum(dim=-1)
+    if attention_mask is not None:
+        if attention_mask.shape != kl.shape:
+            raise ValueError("attention_mask must match the logit sequence shape")
+        kl = kl[attention_mask.to(device=kl.device, dtype=torch.bool)]
+    return float(kl.mean().detach().cpu()) if kl.numel() else 0.0
 
 
-def logit_mse(reference_logits: torch.Tensor, candidate_logits: torch.Tensor) -> float:
+def logit_mse(
+    reference_logits: torch.Tensor,
+    candidate_logits: torch.Tensor,
+    attention_mask: torch.Tensor | None = None,
+) -> float:
     if reference_logits.shape != candidate_logits.shape:
         raise ValueError(f"logit shapes differ: {tuple(reference_logits.shape)} vs {tuple(candidate_logits.shape)}")
-    return float(torch.mean((reference_logits - candidate_logits) ** 2).detach().cpu())
+    per_token = torch.mean((reference_logits - candidate_logits) ** 2, dim=-1)
+    if attention_mask is not None:
+        if attention_mask.shape != per_token.shape:
+            raise ValueError("attention_mask must match the logit sequence shape")
+        per_token = per_token[attention_mask.to(device=per_token.device, dtype=torch.bool)]
+    return float(per_token.mean().detach().cpu()) if per_token.numel() else 0.0
 
 
 def restoration_fraction(restored_error: float, ablated_error: float) -> float:
@@ -62,6 +95,9 @@ def evaluate_live_causal_restoration(
     target_layer: str,
     patch_lookup: Dict[int, np.ndarray],
     sample_idx_lookup: list[int],
+    attention_mask: torch.Tensor | None = None,
+    position_lookup: list[int] | Mapping[int, list[int]] | None = None,
+    null_patch_lookup: Dict[int, np.ndarray] | None = None,
 ) -> Dict[str, float]:
     """
     Run clean, zero-ablated, and ATO-restored forwards through a model.
@@ -77,15 +113,26 @@ def evaluate_live_causal_restoration(
     except StopIteration:
         device = input_ids.device
     input_ids = input_ids.to(device)
+    if attention_mask is not None:
+        attention_mask = attention_mask.to(device)
+
+    def forward_model():
+        if attention_mask is None:
+            return model(input_ids)
+        return model(input_ids, attention_mask=attention_mask)
 
     try:
         with torch.no_grad():
-            clean_logits = _extract_logits(model(input_ids)).detach()
+            clean_logits = _extract_logits(forward_model()).detach()
 
-            zero_hook = create_full_sequence_zero_hook(target_layer)
+            zero_hook = create_full_sequence_zero_hook(
+                target_layer,
+                sample_idx_lookup=sample_idx_lookup,
+                j_positions=position_lookup,
+            )
             zero_hook.apply(model)
             try:
-                ablated_logits = _extract_logits(model(input_ids)).detach()
+                ablated_logits = _extract_logits(forward_model()).detach()
             finally:
                 zero_hook.remove()
 
@@ -93,25 +140,40 @@ def evaluate_live_causal_restoration(
                 target_layer=target_layer,
                 patch_lookup=patch_lookup,
                 sample_idx_lookup=sample_idx_lookup,
+                j_positions=position_lookup,
             )
             restore_hook.apply(model)
             try:
-                restored_logits = _extract_logits(model(input_ids)).detach()
+                restored_logits = _extract_logits(forward_model()).detach()
             finally:
                 restore_hook.remove()
+
+            null_logits = None
+            if null_patch_lookup is not None:
+                null_hook = create_routed_transport_hook(
+                    target_layer=target_layer,
+                    patch_lookup=null_patch_lookup,
+                    sample_idx_lookup=sample_idx_lookup,
+                    j_positions=position_lookup,
+                )
+                null_hook.apply(model)
+                try:
+                    null_logits = _extract_logits(forward_model()).detach()
+                finally:
+                    null_hook.remove()
     finally:
         if model_was_training:
             model.train()
 
-    ablated_kl = mean_token_kl(clean_logits, ablated_logits)
-    restored_kl = mean_token_kl(clean_logits, restored_logits)
-    ablated_mse = logit_mse(clean_logits, ablated_logits)
-    restored_mse = logit_mse(clean_logits, restored_logits)
-    clean_ce = next_token_cross_entropy(clean_logits, input_ids)
-    ablated_ce = next_token_cross_entropy(ablated_logits, input_ids)
-    restored_ce = next_token_cross_entropy(restored_logits, input_ids)
+    ablated_kl = mean_token_kl(clean_logits, ablated_logits, attention_mask)
+    restored_kl = mean_token_kl(clean_logits, restored_logits, attention_mask)
+    ablated_mse = logit_mse(clean_logits, ablated_logits, attention_mask)
+    restored_mse = logit_mse(clean_logits, restored_logits, attention_mask)
+    clean_ce = next_token_cross_entropy(clean_logits, input_ids, attention_mask)
+    ablated_ce = next_token_cross_entropy(ablated_logits, input_ids, attention_mask)
+    restored_ce = next_token_cross_entropy(restored_logits, input_ids, attention_mask)
 
-    return {
+    metrics = {
         "clean_cross_entropy": clean_ce,
         "ablated_cross_entropy": ablated_ce,
         "restored_cross_entropy": restored_ce,
@@ -126,3 +188,21 @@ def evaluate_live_causal_restoration(
             ablated_ce - clean_ce,
         ),
     }
+    if null_logits is not None:
+        null_kl = mean_token_kl(clean_logits, null_logits, attention_mask)
+        null_mse = logit_mse(clean_logits, null_logits, attention_mask)
+        null_ce = next_token_cross_entropy(null_logits, input_ids, attention_mask)
+        metrics.update(
+            {
+                "null_cross_entropy": null_ce,
+                "null_kl": null_kl,
+                "null_logit_mse": null_mse,
+                "null_kl_restoration": restoration_fraction(null_kl, ablated_kl),
+                "null_logit_mse_restoration": restoration_fraction(null_mse, ablated_mse),
+                "null_cross_entropy_delta_restoration": restoration_fraction(
+                    null_ce - clean_ce,
+                    ablated_ce - clean_ce,
+                ),
+            }
+        )
+    return metrics

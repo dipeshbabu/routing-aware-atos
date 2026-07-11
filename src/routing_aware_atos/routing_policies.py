@@ -16,6 +16,7 @@ class RoutingPolicyConfig:
     exclude_self: bool = False
     allow_negative_scores: bool = False
     random_seed: int = 0
+    causal_only: bool = False
 
 
 class RoutingPolicy(ABC):
@@ -68,6 +69,9 @@ class RoutingPolicy(ABC):
 
         scores = score_vector.astype(np.float64, copy=True)
 
+        if self.config.causal_only and target_pos + 1 < len(scores):
+            scores[target_pos + 1 :] = -np.inf
+
         if self.config.exclude_self and 0 <= target_pos < len(scores):
             scores[target_pos] = -np.inf
 
@@ -92,7 +96,8 @@ class RoutingPolicy(ABC):
         return chosen_idx.astype(int), weights.astype(float)
 
     def _valid_source_indices(self, sample: CachedSample, target_pos: int) -> np.ndarray:
-        indices = np.arange(sample.seq_len, dtype=int)
+        stop = target_pos + 1 if self.config.causal_only else sample.seq_len
+        indices = np.arange(stop, dtype=int)
         if self.config.exclude_self and 0 <= target_pos < sample.seq_len:
             indices = indices[indices != target_pos]
         if indices.size == 0:
@@ -180,7 +185,7 @@ class NextTokenPolicy(RoutingPolicy):
         sample.validate()
         if target_pos < 0 or target_pos >= sample.seq_len:
             raise IndexError(f"target_pos={target_pos} out of bounds for seq_len={sample.seq_len}")
-        source_pos = min(sample.seq_len - 1, target_pos + 1)
+        source_pos = target_pos if self.config.causal_only else min(sample.seq_len - 1, target_pos + 1)
         if self.config.exclude_self and source_pos == target_pos:
             candidates = self._valid_source_indices(sample, target_pos)
             source_pos = int(candidates[-1])
@@ -334,7 +339,9 @@ class ShuffledAttentionTopKPolicy(RoutingPolicy):
         score_matrix = sample.attention_scores[key]
         score_vector = np.asarray(score_matrix[target_pos], dtype=np.float64)
         rng = self._deterministic_rng(sample, target_pos, source_layer, target_layer)
-        shuffled_scores = score_vector[rng.permutation(len(score_vector))]
+        shuffled_scores = score_vector.copy()
+        valid_indices = self._valid_source_indices(sample, target_pos)
+        shuffled_scores[valid_indices] = score_vector[rng.permutation(valid_indices)]
 
         idx, weights = self._take_topk(score_vector=shuffled_scores, target_pos=target_pos)
         return RouteSelection(

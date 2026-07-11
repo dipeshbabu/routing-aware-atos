@@ -5,6 +5,7 @@ import numpy as np
 from routing_aware_atos.evaluation.transport_efficiency import (
     canonical_correlations,
     compute_transport_efficiency,
+    compute_transport_efficiency_rank_sweep_torch,
     effective_transport_dimensionality,
     transport_r2_ceiling,
 )
@@ -71,3 +72,26 @@ def test_transport_efficiency_rejects_negative_eps():
         assert "eps must be non-negative" in str(exc)
     else:
         raise AssertionError("negative eps should fail")
+
+
+def test_torch_rank_sweep_matches_full_rank_linear_transport():
+    rng = np.random.default_rng(13)
+    X = rng.normal(size=(200, 4)).astype(np.float32)
+    Y = X @ np.asarray(
+        [[1.0, 0.2, 0.0, 0.0], [0.0, 1.0, 0.1, 0.0], [0.0, 0.0, 1.0, 0.3], [0.1, 0.0, 0.0, 1.0]],
+        dtype=np.float32,
+    )
+    operator = TransportOperator(TransportOperatorConfig(ridge_lambda=1e-6)).fit(X, Y)
+
+    payload = compute_transport_efficiency_rank_sweep_torch(
+        operator,
+        X,
+        Y,
+        ranks=[1, 2, 4],
+        device="cpu",
+    )
+
+    assert [row["rank"] for row in payload["ranks"]] == [1, 2, 4]
+    assert payload["ranks"][-1]["residual_r2"] > 0.99
+    assert payload["ranks"][-1]["whitened_r2"] > 0.99
+    assert payload["effective_dimensionality"] > 3.5

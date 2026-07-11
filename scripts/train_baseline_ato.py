@@ -15,7 +15,7 @@ from routing_aware_atos.activation_loader import ActivationLoader
 from routing_aware_atos.data.baseline_pairs import SameTokenBaselineBuilder
 from routing_aware_atos.data.mock_cache import make_mock_samples
 from routing_aware_atos.models.transport_operator import TransportOperator, TransportOperatorConfig
-from routing_aware_atos.utils.io import load_cached_samples, load_npz, load_yaml, save_json
+from routing_aware_atos.utils.io import load_npz, load_yaml, save_json
 
 
 def main() -> None:
@@ -30,15 +30,21 @@ def main() -> None:
         pair_metadata = {"pairs_path": cfg["pairs_path"]}
     else:
         if cfg.get("activation_dir_path"):
-            loader = ActivationLoader(activation_dir_path=cfg["activation_dir_path"])
-            samples = list(
-                loader.iter_cached_samples(
+            with ActivationLoader(activation_dir_path=cfg["activation_dir_path"]) as loader:
+                samples = list(loader.iter_cached_samples(
                     idx_list=cfg.get("idx_list"),
                     layer_indices=[cfg["source_layer"], cfg["target_layer"]],
-                )
-            )
+                    split_name=cfg.get("split_name"),
+                    strict=True,
+                ))
         elif cfg.get("cache_path"):
-            samples = load_cached_samples(cfg["cache_path"])
+            with ActivationLoader(samples_path=cfg["cache_path"]) as loader:
+                samples = list(loader.iter_cached_samples(
+                    idx_list=cfg.get("idx_list"),
+                    layer_indices=[cfg["source_layer"], cfg["target_layer"]],
+                    split_name=cfg.get("split_name"),
+                    strict=True,
+                ))
         else:
             samples = make_mock_samples(
                 num_samples=cfg.get("num_samples", 2),
@@ -56,6 +62,7 @@ def main() -> None:
             "source_layer": cfg["source_layer"],
             "target_layer": cfg["target_layer"],
             "num_rows": int(X.shape[0]),
+            "split_name": cfg.get("split_name"),
         }
         if cfg.get("activation_dir_path"):
             pair_metadata["activation_dir_path"] = cfg["activation_dir_path"]
@@ -67,6 +74,8 @@ def main() -> None:
             ridge_lambda=cfg.get("ridge_lambda", 1e-2),
             rank=cfg.get("rank"),
             name="same_token_baseline",
+            compute_backend=cfg.get("compute_backend", "numpy"),
+            device=cfg.get("device", "cpu"),
         )
     ).fit(X, Y)
 

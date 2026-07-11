@@ -8,6 +8,7 @@ from typing import Any, Dict
 import numpy as np
 
 from routing_aware_atos.models.rank_truncation import truncate_matrix_rank
+from routing_aware_atos.utils.io import load_npz, save_npz
 
 
 @dataclass
@@ -16,6 +17,8 @@ class TransportOperatorConfig:
     rank: int | None = None
     regression: str = "ridge"
     name: str = "transport_operator"
+    compute_backend: str = "numpy"
+    device: str = "cpu"
 
     def validate(self) -> None:
         if self.regression != "ridge":
@@ -24,6 +27,8 @@ class TransportOperatorConfig:
             raise ValueError("ridge_lambda must be non-negative")
         if self.rank is not None and self.rank <= 0:
             raise ValueError("rank must be positive when provided")
+        if self.compute_backend not in {"numpy", "torch"}:
+            raise ValueError("compute_backend must be 'numpy' or 'torch'")
 
 
 @dataclass
@@ -37,6 +42,9 @@ class TransportOperator:
 
     def fit(self, X: np.ndarray, Y: np.ndarray) -> "TransportOperator":
         self.config.validate()
+        if self.config.compute_backend == "torch":
+            return self._fit_torch(X, Y)
+
         X = np.asarray(X, dtype=np.float64)
         Y = np.asarray(Y, dtype=np.float64)
         if X.ndim != 2 or Y.ndim != 2:
@@ -63,7 +71,62 @@ class TransportOperator:
         self.x_mean = x_mean.astype(np.float32)
         self.y_mean = y_mean.astype(np.float32)
         self.train_metrics = self.evaluate(X, Y)
-        self.train_metrics["effective_rank"] = float(np.linalg.matrix_rank(self.weight))
+        self.train_metrics["effective_rank"] = float(
+            min(self.weight.shape)
+            if self.config.rank is None
+            else min(int(self.config.rank), *self.weight.shape)
+        )
+        self.train_metrics["requested_rank"] = -1.0 if self.config.rank is None else float(self.config.rank)
+        return self
+
+    def _fit_torch(self, X: np.ndarray, Y: np.ndarray) -> "TransportOperator":
+        try:
+            import torch
+        except ImportError as exc:  # pragma: no cover - torch is a core dependency
+            raise ImportError("The torch compute backend requires PyTorch") from exc
+
+        X_np = np.asarray(X, dtype=np.float32)
+        Y_np = np.asarray(Y, dtype=np.float32)
+        if X_np.ndim != 2 or Y_np.ndim != 2:
+            raise ValueError(f"Expected 2D arrays, got X{X_np.shape}, Y{Y_np.shape}")
+        if X_np.shape[0] != Y_np.shape[0]:
+            raise ValueError(f"X and Y must have same number of rows, got {X_np.shape[0]} vs {Y_np.shape[0]}")
+        if X_np.shape[0] == 0:
+            raise ValueError("Cannot fit on empty dataset")
+
+        device = torch.device(self.config.device)
+        X_t = torch.as_tensor(X_np, dtype=torch.float32, device=device)
+        Y_t = torch.as_tensor(Y_np, dtype=torch.float32, device=device)
+        x_mean_t = X_t.mean(dim=0)
+        y_mean_t = Y_t.mean(dim=0)
+        Xc = X_t - x_mean_t
+        Yc = Y_t - y_mean_t
+        lhs = Xc.T @ Xc
+        lhs.diagonal().add_(float(self.config.ridge_lambda))
+        rhs = Xc.T @ Yc
+        weight_t = torch.linalg.solve(lhs, rhs)
+
+        if self.config.rank is not None:
+            max_rank = min(weight_t.shape)
+            rank = min(int(self.config.rank), max_rank)
+            U, singular_values, Vh = torch.linalg.svd(weight_t, full_matrices=False)
+            weight_t = (U[:, :rank] * singular_values[:rank]) @ Vh[:rank, :]
+
+        bias_t = y_mean_t - x_mean_t @ weight_t
+        self.weight = weight_t.detach().cpu().numpy().astype(np.float32, copy=False)
+        self.bias = bias_t.detach().cpu().numpy().astype(np.float32, copy=False)
+        self.x_mean = x_mean_t.detach().cpu().numpy().astype(np.float32, copy=False)
+        self.y_mean = y_mean_t.detach().cpu().numpy().astype(np.float32, copy=False)
+        del X_t, Y_t, Xc, Yc, lhs, rhs, weight_t, bias_t
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+        self.train_metrics = self.evaluate(X_np, Y_np)
+        self.train_metrics["effective_rank"] = float(
+            min(self.weight.shape)
+            if self.config.rank is None
+            else min(int(self.config.rank), *self.weight.shape)
+        )
         self.train_metrics["requested_rank"] = -1.0 if self.config.rank is None else float(self.config.rank)
         return self
 
@@ -88,8 +151,14 @@ class TransportOperator:
         Y = np.asarray(Y, dtype=np.float32)
         mse = float(np.mean((preds - Y) ** 2))
         mae = float(np.mean(np.abs(preds - Y)))
-        var = float(np.var(Y))
-        r2 = 0.0 if var <= 0 else float(1.0 - mse / var)
+        residual_sum_squares = np.sum((preds - Y) ** 2, axis=0)
+        total_sum_squares = np.sum((Y - Y.mean(axis=0, keepdims=True)) ** 2, axis=0)
+        per_output_r2 = np.where(
+            total_sum_squares > 1e-12,
+            1.0 - residual_sum_squares / np.maximum(total_sum_squares, 1e-12),
+            0.0,
+        )
+        r2 = float(np.mean(per_output_r2))
         return {"mse": mse, "mae": mae, "r2": r2}
 
     def evaluate_xy(self, X: np.ndarray, Y: np.ndarray) -> Dict[str, float]:
@@ -100,7 +169,7 @@ class TransportOperator:
             raise ValueError("Cannot save an unfitted operator")
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez(
+        save_npz(
             path,
             weight=self.weight,
             bias=self.bias,
@@ -108,16 +177,18 @@ class TransportOperator:
             y_mean=self.y_mean,
             ridge_lambda=np.asarray(self.config.ridge_lambda, dtype=np.float32),
             rank=np.asarray(-1 if self.config.rank is None else self.config.rank, dtype=np.int32),
+            compute_backend=np.asarray(self.config.compute_backend),
         )
 
     @classmethod
     def load(cls, path: str | Path, *, name: str = "transport_operator") -> "TransportOperator":
-        data = np.load(path)
+        data = load_npz(path)
         rank = int(data["rank"])
         config = TransportOperatorConfig(
             ridge_lambda=float(data["ridge_lambda"]),
             rank=None if rank < 0 else rank,
             name=name,
+            compute_backend=str(data["compute_backend"].item()) if "compute_backend" in data else "numpy",
         )
         model = cls(config=config)
         model.weight = data["weight"].astype(np.float32)
@@ -131,5 +202,7 @@ class TransportOperator:
             "name": self.config.name,
             "ridge_lambda": self.config.ridge_lambda,
             "rank": self.config.rank,
+            "compute_backend": self.config.compute_backend,
+            "device": self.config.device,
             "train_metrics": self.train_metrics,
         }

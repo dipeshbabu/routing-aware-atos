@@ -45,6 +45,7 @@ def compare_policy_runs(
                 exclude_self=routing_cfg.get("exclude_self", False),
                 allow_negative_scores=routing_cfg.get("allow_negative_scores", False),
                 random_seed=routing_cfg.get("random_seed", 0),
+                causal_only=routing_cfg.get("causal_only", False),
                 input_mode=routing_cfg.get("input_mode", "weighted_sum"),
                 max_sources=routing_cfg.get("max_sources"),
                 include_positions=run.get("include_positions"),

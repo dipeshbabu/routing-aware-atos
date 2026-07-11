@@ -185,3 +185,109 @@ def evaluate_operator_transport_efficiency(
         rank = min(np.asarray(X).shape[1], np.asarray(Y).shape[1])
     Y_pred = operator.predict(X)
     return compute_transport_efficiency(X, Y, Y_pred, rank=int(rank), eps=eps)
+
+
+def compute_transport_efficiency_rank_sweep_torch(
+    operator: TransportOperator,
+    X: np.ndarray,
+    Y: np.ndarray,
+    *,
+    ranks: list[int],
+    device: str = "cuda",
+    eps: float = 1e-6,
+) -> Dict[str, Any]:
+    """Compute a rank sweep on GPU while adding each SVD mode only once."""
+
+    try:
+        import torch
+    except ImportError as exc:  # pragma: no cover - torch is a core dependency
+        raise ImportError("Torch is required for GPU transport-efficiency sweeps") from exc
+    if operator.weight is None or operator.x_mean is None or operator.y_mean is None:
+        raise ValueError("operator must be fitted")
+    X_np = np.asarray(X, dtype=np.float32)
+    Y_np = np.asarray(Y, dtype=np.float32)
+    if X_np.ndim != 2 or Y_np.ndim != 2 or X_np.shape[0] != Y_np.shape[0]:
+        raise ValueError(f"Expected aligned 2D X/Y arrays, got {X_np.shape} and {Y_np.shape}")
+    max_rank = min(operator.weight.shape)
+    normalized_ranks = sorted({min(int(rank), max_rank) for rank in ranks if int(rank) > 0})
+    if not normalized_ranks:
+        raise ValueError("ranks must contain at least one positive value")
+
+    torch_device = torch.device(device)
+    X_t = torch.as_tensor(X_np, dtype=torch.float32, device=torch_device)
+    Y_t = torch.as_tensor(Y_np, dtype=torch.float32, device=torch_device)
+    weight = torch.as_tensor(operator.weight, dtype=torch.float32, device=torch_device)
+    x_train_mean = torch.as_tensor(operator.x_mean, dtype=torch.float32, device=torch_device)
+    y_train_mean = torch.as_tensor(operator.y_mean, dtype=torch.float32, device=torch_device)
+    x_test_mean = X_t.mean(dim=0)
+    y_test_mean = Y_t.mean(dim=0)
+    X_test_centered = X_t - x_test_mean
+    Y_test_centered = Y_t - y_test_mean
+    denominator = float(max(X_t.shape[0] - 1, 1))
+
+    def inverse_sqrt_psd(matrix: torch.Tensor) -> torch.Tensor:
+        matrix = 0.5 * (matrix + matrix.T)
+        eigenvalues, eigenvectors = torch.linalg.eigh(matrix)
+        threshold = float(eps) * torch.clamp(eigenvalues.max(), min=1.0)
+        inverse = torch.where(
+            eigenvalues > threshold,
+            torch.rsqrt(torch.clamp(eigenvalues, min=threshold)),
+            torch.zeros_like(eigenvalues),
+        )
+        return (eigenvectors * inverse) @ eigenvectors.T
+
+    cov_xx = (X_test_centered.T @ X_test_centered) / denominator
+    cov_yy = (Y_test_centered.T @ Y_test_centered) / denominator
+    cov_xy = (X_test_centered.T @ Y_test_centered) / denominator
+    whitening_x = inverse_sqrt_psd(cov_xx)
+    whitening_y = inverse_sqrt_psd(cov_yy)
+    canonical = torch.linalg.svdvals(whitening_x @ cov_xy @ whitening_y).clamp(0.0, 1.0)
+    squared_canonical = canonical.square()
+
+    U, singular_values, Vh = torch.linalg.svd(weight, full_matrices=False)
+    projected_source = (X_t - x_train_mean) @ U
+    predicted_centered = (y_train_mean - y_test_mean).expand_as(Y_t).clone()
+    predicted_whitened = ((y_train_mean - y_test_mean) @ whitening_y).expand_as(Y_t).clone()
+    target_whitened = Y_test_centered @ whitening_y
+    target_whitened_total = torch.sum(target_whitened.square())
+    residual_total = torch.sum(Y_test_centered.square())
+    rows: list[dict[str, float | int]] = []
+    previous_rank = 0
+
+    for rank in normalized_ranks:
+        z_chunk = projected_source[:, previous_rank:rank] * singular_values[previous_rank:rank]
+        vh_chunk = Vh[previous_rank:rank, :]
+        predicted_centered += z_chunk @ vh_chunk
+        predicted_whitened += z_chunk @ (vh_chunk @ whitening_y)
+        whitened_error = torch.sum((target_whitened - predicted_whitened).square())
+        residual_error = torch.sum((Y_test_centered - predicted_centered).square())
+        whitened_r2_value = float((1.0 - whitened_error / target_whitened_total).item())
+        residual_r2_value = float((1.0 - residual_error / residual_total).item())
+        ceiling = float((squared_canonical[:rank].sum() / Y_t.shape[1]).item())
+        raw_efficiency = 0.0 if ceiling <= 1e-12 else whitened_r2_value / ceiling
+        rows.append(
+            {
+                "rank": int(rank),
+                "residual_r2": residual_r2_value,
+                "whitened_r2": whitened_r2_value,
+                "ceiling_r2": ceiling,
+                "raw_efficiency": float(raw_efficiency),
+                "efficiency": float(np.clip(raw_efficiency, 0.0, 1.0)),
+            }
+        )
+        previous_rank = rank
+
+    squared_np = squared_canonical.detach().cpu().numpy().astype(np.float64)
+    payload = {
+        "ranks": rows,
+        "canonical_correlations": canonical.detach().cpu().numpy().astype(np.float64).tolist(),
+        "squared_canonical_correlations": squared_np.tolist(),
+        "effective_dimensionality": effective_transport_dimensionality(squared_np),
+        "cca_split": "test",
+        "dtype": "float32",
+        "device": str(torch_device),
+    }
+    del X_t, Y_t, weight, projected_source, predicted_centered, predicted_whitened
+    if torch_device.type == "cuda":
+        torch.cuda.empty_cache()
+    return payload

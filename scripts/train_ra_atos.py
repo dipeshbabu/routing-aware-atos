@@ -17,7 +17,7 @@ from routing_aware_atos.data.routed_dataset import ConcatenatedRoutedActivationD
 from routing_aware_atos.models.routed_transport_operator import RoutedTransportOperator
 from routing_aware_atos.models.transport_operator import TransportOperatorConfig
 from routing_aware_atos.routing.factory import build_routing_policy
-from routing_aware_atos.utils.io import load_cached_samples, load_npz, load_yaml
+from routing_aware_atos.utils.io import load_npz, load_yaml
 
 
 def main() -> None:
@@ -38,19 +38,28 @@ def main() -> None:
             exclude_self=cfg.get("exclude_self", False),
             allow_negative_scores=cfg.get("allow_negative_scores", False),
             random_seed=cfg.get("random_seed", 0),
+            causal_only=cfg.get("causal_only", False),
         )
         if cfg.get("activation_dir_path"):
-            loader = ActivationLoader(activation_dir_path=cfg["activation_dir_path"])
-            samples = list(
-                loader.iter_cached_samples(
+            with ActivationLoader(activation_dir_path=cfg["activation_dir_path"]) as loader:
+                samples = list(loader.iter_cached_samples(
                     idx_list=cfg.get("idx_list"),
                     layer_indices=[cfg["source_layer"], cfg["target_layer"]],
                     attention_layer_pairs=[(cfg["source_layer"], cfg["target_layer"])] if policy.requires_attention else None,
                     attribution_layer_pairs=[(cfg["source_layer"], cfg["target_layer"])] if policy.requires_attribution else None,
-                )
-            )
+                    split_name=cfg.get("split_name"),
+                    strict=True,
+                ))
         elif cfg.get("cache_path"):
-            samples = load_cached_samples(cfg["cache_path"])
+            with ActivationLoader(samples_path=cfg["cache_path"]) as loader:
+                samples = list(loader.iter_cached_samples(
+                    idx_list=cfg.get("idx_list"),
+                    layer_indices=[cfg["source_layer"], cfg["target_layer"]],
+                    attention_layer_pairs=[(cfg["source_layer"], cfg["target_layer"])] if policy.requires_attention else None,
+                    attribution_layer_pairs=[(cfg["source_layer"], cfg["target_layer"])] if policy.requires_attribution else None,
+                    split_name=cfg.get("split_name"),
+                    strict=True,
+                ))
         else:
             samples = make_mock_samples(
                 num_samples=cfg.get("num_samples", 2),
@@ -87,6 +96,8 @@ def main() -> None:
             ridge_lambda=cfg.get("ridge_lambda", 1e-2),
             rank=cfg.get("rank"),
             name="routing_aware_operator",
+            compute_backend=cfg.get("compute_backend", "numpy"),
+            device=cfg.get("device", "cpu"),
         ),
         routing_policy_name=cfg.get("routing_policy", "from_pairs"),
         route_summary=route_summary,
@@ -105,6 +116,7 @@ def main() -> None:
             "max_sources": cfg.get("max_sources", cfg.get("top_k", 1)),
             "activation_dir_path": cfg.get("activation_dir_path"),
             "cache_path": cfg.get("cache_path"),
+            "split_name": cfg.get("split_name"),
         },
     )
     print(f"Saved routed operator -> {out_dir}")

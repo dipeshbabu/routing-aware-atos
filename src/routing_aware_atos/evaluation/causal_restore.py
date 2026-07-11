@@ -55,9 +55,11 @@ def compute_feature_restoration(
     )
     summary = summarize_feature_metrics(feature_metrics)
 
-    A_true = Y_true @ decoder.T
-    A_zero = np.zeros_like(Y_true) @ decoder.T
-    A_pred = Y_pred @ decoder.T
+    selected_ids = feature_metrics.feature_ids
+    selected_decoder = np.asarray(decoder, dtype=np.float32)[selected_ids]
+    A_true = Y_true @ selected_decoder.T
+    A_zero = np.zeros_like(Y_true) @ selected_decoder.T
+    A_pred = Y_pred @ selected_decoder.T
 
     ablated_mse = float(np.mean((A_zero - A_true) ** 2))
     restored_mse = float(np.mean((A_pred - A_true) ** 2))
@@ -192,6 +194,7 @@ def evaluate_causal_restoration_from_cached_samples(
     exclude_self: bool = False,
     allow_negative_scores: bool = False,
     random_seed: int = 0,
+    causal_only: bool = False,
     input_mode: str = "weighted_sum",
     max_sources: int | None = None,
     include_positions: list[int] | None = None,
@@ -199,6 +202,7 @@ def evaluate_causal_restoration_from_cached_samples(
     feature_ids: Iterable[int] | None = None,
     output_path: str | Path | None = None,
     split_name: str = "eval",
+    filter_split: bool = False,
     num_samples: int = 2,
     seq_len: int = 6,
     d_model: int = 4,
@@ -213,30 +217,33 @@ def evaluate_causal_restoration_from_cached_samples(
         exclude_self=exclude_self,
         allow_negative_scores=allow_negative_scores,
         random_seed=random_seed,
+        causal_only=causal_only,
     )
 
     if activation_dir_path:
-        loader = ActivationLoader(activation_dir_path=activation_dir_path)
-        idx_list = list(range(len(loader)))
-        samples = list(
-            loader.iter_cached_samples(
-                idx_list=idx_list,
-                layer_indices=[source_layer, target_layer],
-                attention_layer_pairs=[(source_layer, target_layer)] if policy.requires_attention else None,
-                attribution_layer_pairs=[(source_layer, target_layer)] if policy.requires_attribution else None,
+        with ActivationLoader(activation_dir_path=activation_dir_path) as loader:
+            idx_list = loader.indices_for_split(split_name) if filter_split else list(range(len(loader)))
+            samples = list(
+                loader.iter_cached_samples(
+                    idx_list=idx_list,
+                    layer_indices=[source_layer, target_layer],
+                    attention_layer_pairs=[(source_layer, target_layer)] if policy.requires_attention else None,
+                    attribution_layer_pairs=[(source_layer, target_layer)] if policy.requires_attribution else None,
+                    strict=True,
+                )
             )
-        )
     elif cache_path:
-        loader = ActivationLoader(samples_path=cache_path)
-        idx_list = list(range(len(loader)))
-        samples = list(
-            loader.iter_cached_samples(
-                idx_list=idx_list,
-                layer_indices=[source_layer, target_layer],
-                attention_layer_pairs=[(source_layer, target_layer)] if policy.requires_attention else None,
-                attribution_layer_pairs=[(source_layer, target_layer)] if policy.requires_attribution else None,
+        with ActivationLoader(samples_path=cache_path) as loader:
+            idx_list = loader.indices_for_split(split_name) if filter_split else list(range(len(loader)))
+            samples = list(
+                loader.iter_cached_samples(
+                    idx_list=idx_list,
+                    layer_indices=[source_layer, target_layer],
+                    attention_layer_pairs=[(source_layer, target_layer)] if policy.requires_attention else None,
+                    attribution_layer_pairs=[(source_layer, target_layer)] if policy.requires_attribution else None,
+                    strict=True,
+                )
             )
-        )
     else:
         samples = make_mock_samples(num_samples=num_samples, seq_len=seq_len, d_model=d_model)
 
@@ -315,12 +322,14 @@ def compare_causal_policy_runs(
                 exclude_self=routing_cfg.get("exclude_self", False),
                 allow_negative_scores=routing_cfg.get("allow_negative_scores", False),
                 random_seed=routing_cfg.get("random_seed", 0),
+                causal_only=routing_cfg.get("causal_only", False),
                 input_mode=routing_cfg.get("input_mode", "weighted_sum"),
                 max_sources=routing_cfg.get("max_sources"),
                 include_positions=run.get("include_positions"),
                 readout_path=run.get("readout_path"),
                 feature_ids=feature_ids,
                 split_name=run.get("split_name", "eval"),
+                filter_split=run.get("filter_split", False),
                 num_samples=run.get("num_samples", 2),
                 seq_len=run.get("seq_len", 6),
                 d_model=run.get("d_model", 4),

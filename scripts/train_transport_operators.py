@@ -32,6 +32,7 @@ def _build_routing_policy(cfg: dict[str, Any]):
         exclude_self=bool(routing_cfg.get("exclude_self", False)),
         allow_negative_scores=bool(routing_cfg.get("allow_negative_scores", False)),
         random_seed=int(routing_cfg.get("random_seed", 0)),
+        causal_only=bool(routing_cfg.get("causal_only", False)),
     )
 
 
@@ -49,6 +50,20 @@ def _build_index_splits(num_samples: int) -> tuple[list[int], list[int], list[in
     return train_indices, val_indices, test_indices
 
 
+def _resolve_index_splits(
+    loader: ActivationLoader,
+    *,
+    use_dataset_splits: bool,
+) -> tuple[list[int], list[int], list[int]]:
+    if not use_dataset_splits:
+        return _build_index_splits(len(loader))
+    return (
+        loader.indices_for_split("train"),
+        loader.indices_for_split("validation"),
+        loader.indices_for_split("test"),
+    )
+
+
 def _collect_cached_samples(
     loader: ActivationLoader,
     idx_list: list[int],
@@ -63,20 +78,19 @@ def _collect_cached_samples(
             layer_indices=[source_layer, target_layer],
             attention_layer_pairs=[(source_layer, target_layer)] if use_attention else None,
             attribution_layer_pairs=[(source_layer, target_layer)] if use_attribution else None,
+            strict=True,
         )
     )
 
 
 def _evaluate_xy(transport_operator: TransportOperator, X: np.ndarray, Y: np.ndarray) -> dict[str, float]:
-    preds = transport_operator.predict(X)
-    mse = float(np.mean((preds - Y) ** 2))
+    metrics = transport_operator.evaluate(X, Y)
+    mse = float(metrics["mse"])
     rmse = float(np.sqrt(mse))
-    var = float(np.var(Y))
-    r2 = 0.0 if var <= 0 else float(1.0 - mse / var)
     return {
         "mse": mse,
         "rmse": rmse,
-        "r2_score": r2,
+        "r2_score": float(metrics["r2"]),
     }
 
 
@@ -151,8 +165,11 @@ def main() -> None:
                 route_summary: dict[str, Any] = {}
             elif not routing_enabled:
                 if loader is not None:
-                    train_indices, _, _ = _build_index_splits(len(loader))
-                    samples = _collect_cached_samples(
+                    train_indices, val_indices, test_indices = _resolve_index_splits(
+                        loader,
+                        use_dataset_splits=bool(cfg.get("use_dataset_splits", False)),
+                    )
+                    train_samples = _collect_cached_samples(
                         loader=loader,
                         idx_list=train_indices,
                         source_layer=int(source_layer),
@@ -160,19 +177,54 @@ def main() -> None:
                         use_attention=False,
                         use_attribution=False,
                     )
+                    val_samples = _collect_cached_samples(
+                        loader=loader,
+                        idx_list=val_indices,
+                        source_layer=int(source_layer),
+                        target_layer=target_layer,
+                        use_attention=False,
+                        use_attribution=False,
+                    )
+                    test_samples = _collect_cached_samples(
+                        loader=loader,
+                        idx_list=test_indices,
+                        source_layer=int(source_layer),
+                        target_layer=target_layer,
+                        use_attention=False,
+                        use_attribution=False,
+                    )
                 else:
-                    samples = list(fallback_samples or [])
+                    train_samples = list(fallback_samples or [])
+                    val_samples = train_samples
+                    test_samples = train_samples
 
                 X, Y, _ = SameTokenBaselineBuilder(
-                    samples=samples,
+                    samples=train_samples,
                     source_layer=int(source_layer),
                     target_layer=target_layer,
                     include_positions=cfg.get("include_positions"),
                 ).build_pairs()
+                X_val, Y_val, _ = SameTokenBaselineBuilder(
+                    samples=val_samples,
+                    source_layer=int(source_layer),
+                    target_layer=target_layer,
+                    include_positions=cfg.get("include_positions"),
+                ).build_pairs()
+                X_test, Y_test, _ = SameTokenBaselineBuilder(
+                    samples=test_samples,
+                    source_layer=int(source_layer),
+                    target_layer=target_layer,
+                    include_positions=cfg.get("include_positions"),
+                ).build_pairs()
+                val_pairs = (X_val, Y_val)
+                test_pairs = (X_test, Y_test)
                 route_summary = {}
             else:
                 if loader is not None:
-                    train_indices, val_indices, test_indices = _build_index_splits(len(loader))
+                    train_indices, val_indices, test_indices = _resolve_index_splits(
+                        loader,
+                        use_dataset_splits=bool(cfg.get("use_dataset_splits", False)),
+                    )
                     use_attention = bool(routing_policy.requires_attention)
                     use_attribution = bool(routing_policy.requires_attribution)
                     train_samples = _collect_cached_samples(
@@ -233,6 +285,8 @@ def main() -> None:
                 ridge_lambda=cfg.get("ridge_lambda", 1e-2),
                 rank=cfg.get("rank"),
                 name="routing_aware_operator" if routing_enabled else "same_token_baseline",
+                compute_backend=cfg.get("compute_backend", "numpy"),
+                device=cfg.get("device", "cpu"),
             )
 
             if routing_enabled:
@@ -253,6 +307,10 @@ def main() -> None:
                 metrics_payload = {
                     "train_metrics": operator.train_metrics,
                 }
+                if val_pairs is not None:
+                    metrics_payload["val_metrics"] = _evaluate_xy(operator, val_pairs[0], val_pairs[1])
+                if test_pairs is not None:
+                    metrics_payload["test_metrics"] = _evaluate_xy(operator, test_pairs[0], test_pairs[1])
 
             out_dir = Path(cfg.get("output_dir", "outputs/train_transport_operators")) / f"L{source_layer}_k{k}"
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -267,6 +325,7 @@ def main() -> None:
                 "input_mode": cfg.get("routing", {}).get("input_mode", cfg.get("input_mode", "weighted_sum")),
                 "train_shape": [int(X.shape[0]), int(X.shape[1])],
                 "route_summary": route_summary,
+                "use_dataset_splits": bool(cfg.get("use_dataset_splits", False)),
             }
             save_json(out_dir / "metadata.json", metadata)
             results.append(metadata)
@@ -274,6 +333,9 @@ def main() -> None:
                 f"Saved transport operator for L={source_layer}, k={k} "
                 f"policy={metadata['routing_policy']} -> {out_dir}"
             )
+
+    if loader is not None:
+        loader.close()
 
     summary_path = Path(cfg.get("output_dir", "outputs/train_transport_operators")) / "summary.json"
     save_json(summary_path, {"runs": results})

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from bisect import bisect_right
 from pathlib import Path
 from typing import Generator, Iterable, Iterator, List, Mapping, Optional, Sequence
 
@@ -37,6 +38,9 @@ class ActivationLoader:
         self._samples = list(samples or []) if samples is not None else None
 
         self.store_objects: dict[int, object] = {}
+        self.root_objects: dict[int, object] = {}
+        self.file_paths: list[Path] = []
+        self.sample_offsets: list[int] = [0]
         self.num_samples = 0
         self.samples_per_file = 0
         self._backend = "memory"
@@ -65,35 +69,84 @@ class ActivationLoader:
 
     def sample_map(self, idx: int) -> tuple[int, int]:
         self._require_zarr_backend()
-        if self.samples_per_file == 0:
+        if not self.file_paths:
             raise ValueError("Sample map is not created.")
-        return (idx // self.samples_per_file, idx % self.samples_per_file)
+        if idx < 0 or idx >= self.num_samples:
+            raise IndexError(f"sample_idx={idx} outside [0, {self.num_samples - 1}]")
+        part_id = bisect_right(self.sample_offsets, idx) - 1
+        return part_id, idx - self.sample_offsets[part_id]
 
     def _get_file_list(self) -> list[str]:
         self._require_zarr_backend()
-        return sorted(os.listdir(self.activation_dir_path))
+        assert self.activation_dir_path is not None
+        entries = []
+        for name in sorted(os.listdir(self.activation_dir_path)):
+            path = self.activation_dir_path / name
+            if path.is_file() and path.suffix.lower() == ".zip":
+                entries.append(name)
+            elif path.is_dir() and (
+                path.suffix.lower() == ".zarr"
+                or (path / "zarr.json").exists()
+                or (path / ".zgroup").exists()
+            ):
+                entries.append(name)
+        return entries
 
     def create_store_objects(self) -> None:
         self._require_zarr_backend()
         assert zarr is not None
+        assert self.activation_dir_path is not None
 
-        for i, file_name in enumerate(self._get_file_list()):
+        file_names = self._get_file_list()
+        if not file_names:
+            raise ValueError(f"No .zip or .zarr activation shards found in {self.activation_dir_path}")
+
+        for i, file_name in enumerate(file_names):
             file_path = self.activation_dir_path / file_name
-            store = zarr.storage.ZipStore(file_path, read_only=True)
-            self.store_objects[i] = store
-            self.num_samples += zarr.open(store, mode="r")["activations"]["layer_0"].shape[0]
+            if file_path.is_dir():
+                store = None
+                root = zarr.open_group(str(file_path), mode="r")
+            else:
+                store = zarr.storage.ZipStore(file_path, mode="r")
+                root = zarr.open_group(store=store, mode="r")
+                self.store_objects[i] = store
+            self.root_objects[i] = root
+            self.file_paths.append(file_path)
+            shard_samples = int(root["input_ids"].shape[0])
+            self.num_samples += shard_samples
+            self.sample_offsets.append(self.num_samples)
 
-        if len(self.store_objects) != len(self._get_file_list()):
+        if len(self.root_objects) != len(file_names):
             raise ValueError("Not all zarr activation files were loaded.")
+        self.samples_per_file = int(self.root_objects[0]["input_ids"].shape[0])
 
-        z = zarr.open(self.store_objects[0], mode="r")
-        self.samples_per_file = z["activations"]["layer_0"].shape[0]
+    def close(self) -> None:
+        for store in self.store_objects.values():
+            close = getattr(store, "close", None)
+            if close is not None:
+                close()
+        self.store_objects.clear()
+        self.root_objects.clear()
+
+    def __enter__(self) -> "ActivationLoader":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
+
+    def __del__(self):  # pragma: no cover - best-effort cleanup
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def _get_root(self, sample_idx: int):
+        part_id, local_sample_id = self.sample_map(sample_idx)
+        return self.root_objects[part_id], local_sample_id
 
     def get_sample_sequence_length(self, sample_idx: int) -> int:
         if self._backend == "zarr":
-            part_id, local_sample_id = self.sample_map(sample_idx)
-            store = self.store_objects[part_id]
-            z = zarr.open(store, mode="r")
+            z, local_sample_id = self._get_root(sample_idx)
             return int(np.asarray(z["attention_mask"][local_sample_id], dtype=np.int32).sum())
 
         sample = self.load_cached_sample(sample_idx)
@@ -107,9 +160,7 @@ class ActivationLoader:
             [seq_len]
         """
         self._require_zarr_backend()
-        part_id, local_sample_id = self.sample_map(sample_idx)
-        store = self.store_objects[part_id]
-        z = zarr.open(store, mode="r")
+        z, local_sample_id = self._get_root(sample_idx)
         return np.asarray(z["input_ids"][local_sample_id], dtype=np.int32)
 
     def get_attention_mask(self, sample_idx: int) -> np.ndarray:
@@ -120,10 +171,31 @@ class ActivationLoader:
             [seq_len]
         """
         self._require_zarr_backend()
-        part_id, local_sample_id = self.sample_map(sample_idx)
-        store = self.store_objects[part_id]
-        z = zarr.open(store, mode="r")
+        z, local_sample_id = self._get_root(sample_idx)
         return np.asarray(z["attention_mask"][local_sample_id], dtype=np.int32)
+
+    def get_sample_split(self, sample_idx: int) -> str | None:
+        if self._backend == "zarr":
+            z, local_sample_id = self._get_root(sample_idx)
+            if "split_id" not in z:
+                return None
+            split_id = int(np.asarray(z["split_id"][local_sample_id]))
+            split_names = dict(z.attrs.get("split_names", {}))
+            return split_names.get(str(split_id), split_names.get(split_id))
+
+        sample = self.load_cached_sample(sample_idx)
+        split = (sample.metadata or {}).get("split")
+        return None if split is None else str(split)
+
+    def indices_for_split(self, split_name: str) -> list[int]:
+        split_name = str(split_name)
+        indices = [idx for idx in range(len(self)) if self.get_sample_split(idx) == split_name]
+        if not indices:
+            available = sorted(
+                {name for idx in range(len(self)) if (name := self.get_sample_split(idx)) is not None}
+            )
+            raise ValueError(f"No samples found for split {split_name!r}; available splits: {available}")
+        return indices
 
     def get_sequence_input_ids(self, sample_idx: int) -> np.ndarray:
         """
@@ -153,9 +225,7 @@ class ActivationLoader:
             dict[layer_idx] -> np.ndarray of shape [valid_seq_len, d_model]
         """
         if self._backend == "zarr":
-            part_id, local_sample_id = self.sample_map(sample_idx)
-            store = self.store_objects[part_id]
-            z = zarr.open(store, mode="r")
+            z, local_sample_id = self._get_root(sample_idx)
 
             attention_mask = np.asarray(z["attention_mask"][local_sample_id], dtype=np.int32)
             valid_len = int(attention_mask.sum())
@@ -226,9 +296,7 @@ class ActivationLoader:
               but is not used by the current storage layout.
         """
         if self._backend == "zarr":
-            part_id, local_sample_id = self.sample_map(sample_idx)
-            store = self.store_objects[part_id]
-            z = zarr.open(store, mode="r")
+            z, local_sample_id = self._get_root(sample_idx)
 
             attention_mask = np.asarray(z["attention_mask"][local_sample_id], dtype=np.int32)
             valid_len = int(attention_mask.sum())
@@ -266,18 +334,25 @@ class ActivationLoader:
               but is not used by the current storage layout.
         """
         if self._backend == "zarr":
-            part_id, local_sample_id = self.sample_map(sample_idx)
-            store = self.store_objects[part_id]
-            z = zarr.open(store, mode="r")
+            z, local_sample_id = self._get_root(sample_idx)
 
             attention_mask = np.asarray(z["attention_mask"][local_sample_id], dtype=np.int32)
             valid_len = int(attention_mask.sum())
 
-            array_name = f"attribution_layer_{target_layer}"
+            exact_name = f"attribution_layer_{source_layer}_to_{target_layer}"
+            matrix = self._try_load_score_matrix(
+                z=z,
+                group_name="attribution_scores",
+                array_name=exact_name,
+                local_sample_id=local_sample_id,
+                valid_len=valid_len,
+            )
+            if matrix is not None:
+                return matrix
             return self._try_load_score_matrix(
                 z=z,
                 group_name="attribution_scores",
-                array_name=array_name,
+                array_name=f"attribution_layer_{target_layer}",
                 local_sample_id=local_sample_id,
                 valid_len=valid_len,
             )
@@ -298,9 +373,7 @@ class ActivationLoader:
             }
         """
         if self._backend == "zarr":
-            part_id, _ = self.sample_map(sample_idx)
-            store = self.store_objects[part_id]
-            z = zarr.open(store, mode="r")
+            z, _ = self._get_root(sample_idx)
 
             out = {
                 "attention_scores": [],
@@ -340,9 +413,11 @@ class ActivationLoader:
             residuals = self.get_layer_residuals(sample_idx, layer_indices)
 
             attention_scores = None
-            if attention_layer_pairs:
+            requested_attention = set(attention_layer_pairs or [])
+            requested_attention.update(attribution_layer_pairs or [])
+            if requested_attention:
                 attention_scores = {}
-                for source_layer, target_layer in attention_layer_pairs:
+                for source_layer, target_layer in sorted(requested_attention):
                     matrix = self.get_attention_scores(
                         sample_idx=sample_idx,
                         source_layer=source_layer,
@@ -366,6 +441,14 @@ class ActivationLoader:
                     if matrix is not None:
                         attribution_scores[(source_layer, target_layer)] = matrix
 
+            z, local_sample_id = self._get_root(sample_idx)
+            split_name = self.get_sample_split(sample_idx)
+            sequence_index = (
+                int(np.asarray(z["sequence_index"][local_sample_id]))
+                if "sequence_index" in z
+                else int(sample_idx)
+            )
+
             sample = CachedSample(
                 tokens=tokens,
                 residuals=residuals,
@@ -373,9 +456,26 @@ class ActivationLoader:
                 attribution_scores=attribution_scores or None,
                 metadata={
                     "sample_idx": int(sample_idx),
+                    "sequence_index": sequence_index,
                     "sequence_length": int(len(tokens)),
+                    "split": split_name,
+                    "layer_semantics": str(z.attrs.get("layer_semantics", "unknown")),
                 },
             )
+            if attribution_layer_pairs:
+                from routing_aware_atos.attribution_builder import build_attribution_score_matrix
+
+                generated = dict(sample.attribution_scores or {})
+                for source_layer, target_layer in attribution_layer_pairs:
+                    key = (source_layer, target_layer)
+                    if key not in generated:
+                        generated[key] = build_attribution_score_matrix(
+                            sample,
+                            source_layer,
+                            target_layer,
+                            method="attention_value",
+                        )
+                sample.attribution_scores = generated
             sample.validate()
             return sample
 
@@ -457,6 +557,8 @@ class ActivationLoader:
         attribution_layer_pairs: Optional[list[tuple[int, int]]] = None,
         *,
         layers: Iterable[int] | None = None,
+        split_name: str | None = None,
+        strict: bool = False,
     ) -> Generator[CachedSample, None, None]:
         """
         Iterate over routing-ready CachedSample objects.
@@ -468,7 +570,9 @@ class ActivationLoader:
                 raise ValueError("layer_indices must be provided")
 
         if idx_list is None:
-            idx_list = list(range(len(self)))
+            idx_list = self.indices_for_split(split_name) if split_name is not None else list(range(len(self)))
+        elif split_name is not None:
+            idx_list = [idx for idx in idx_list if self.get_sample_split(idx) == split_name]
 
         for sample_idx in idx_list:
             try:
@@ -487,6 +591,8 @@ class ActivationLoader:
                         attribution_layer_pairs=attribution_layer_pairs,
                     )
             except (ValueError, IndexError, KeyError) as e:
+                if strict:
+                    raise
                 logger.warning(
                     "Skipping cached sample %d due to error: %s",
                     sample_idx,

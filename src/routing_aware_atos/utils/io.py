@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any, Dict, List
 
 import numpy as np
@@ -16,14 +18,48 @@ def load_yaml(path: str | Path) -> Dict[str, Any]:
 
 
 def save_npz(path: str | Path, **arrays: np.ndarray) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    np.savez(path, **arrays)
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp.npz",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+        np.savez(temporary_path, **arrays)
+        with temporary_path.open("rb+") as temporary:
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, destination)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def save_json(path: str | Path, payload: Any) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(payload, temporary, indent=2, allow_nan=False)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, destination)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def load_json(path: str | Path) -> Any:
@@ -59,8 +95,8 @@ def load_cached_samples(path: str | Path) -> List[CachedSample]:
 
 
 def load_npz(path: str | Path) -> Dict[str, np.ndarray]:
-    data = np.load(path)
-    return {key: data[key] for key in data.files}
+    with np.load(path, allow_pickle=False) as data:
+        return {key: data[key] for key in data.files}
 
 
 def save_cached_samples(path: str | Path, samples: List[CachedSample]) -> None:
@@ -80,6 +116,4 @@ def save_cached_samples(path: str | Path, samples: List[CachedSample]) -> None:
             "metadata": sample.metadata or {},
         }
         payload.append(item)
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    save_json(path, payload)

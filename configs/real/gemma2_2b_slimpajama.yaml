@@ -1,0 +1,198 @@
+protocol: paper_scale_routing_v1
+model_name: google/gemma-2-2b
+model_revision: 0738188b3055bc98daf0fe7211f0091357e5b979
+device: cuda
+dtype: float32
+attn_implementation: eager
+
+dataset:
+  name: cerebras/SlimPajama-627B
+  config_name: default
+  revision: 2d0accd
+  text_field: text
+  operator_source_split: train
+  causal_source_split: test
+  seed: 42
+  causal_seed_offset: 1
+  shuffle_buffer_size: 10000
+  causal_shuffle_buffer_size: 1
+  skip_examples: 0
+  causal_skip_examples: 10000
+
+collection:
+  output_dir: artifacts/gemma2_2b_slimpajama_250k
+  operator_tokens: 250000
+  split_fractions:
+    train: 0.6
+    validation: 0.2
+    test: 0.2
+  causal_sequences: 100
+  sequence_length: 256
+  packing_mode: documents
+  batch_size: 8
+  shard_size: 8
+  cache_dtype: float32
+  layer_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+  attention_layers: [10, 20]
+
+sae:
+  release: gemma-scope-2b-pt-res-canonical
+  width: 16k
+  sparsity: canonical
+  targets:
+    - layer: 10
+      sae_id: layer_10/width_16k/canonical
+      output: artifacts/sae/gemma_scope_layer10_width16k.npz
+    - layer: 20
+      sae_id: layer_20/width_16k/canonical
+      output: artifacts/sae/gemma_scope_layer20_width16k.npz
+  artifacts:
+    10: artifacts/sae/gemma_scope_layer10_width16k.npz
+    20: artifacts/sae/gemma_scope_layer20_width16k.npz
+
+feature_selection:
+  method: reference_full
+  activation_dir_path: artifacts/gemma2_2b_slimpajama_250k
+  target_layers: [10, 20]
+  sae_artifacts:
+    10: artifacts/sae/gemma_scope_layer10_width16k.npz
+    20: artifacts/sae/gemma_scope_layer20_width16k.npz
+  split_name: train
+  max_tokens: 120000
+  batch_tokens: 512
+  min_activation_count: 10
+  max_firing_rate: 0.20
+  candidate_percent: 15.0
+  top_percent: 5.0
+  token_hash_bins: 2048
+  redundancy_mode: activation_correlation
+  redundancy_sample_size: 512
+  selection_seed: 0
+  logit_focus_batch_size: 32
+  causal_probe_prompts:
+    - The capital of France is
+    - In Python, a list comprehension
+    - The derivative of x^2 is
+    - "Translate to Spanish: good morning"
+  device: cuda
+  output_dir: artifacts/features
+  score_weights:
+    coherence: 0.45
+    uniqueness: 0.25
+    activity: 0.30
+
+experiments:
+  activation_dir_path: artifacts/gemma2_2b_slimpajama_250k
+  output_dir: outputs/real
+  compute_backend: torch
+  device: cuda
+  causal_only: true
+  ridge_selection: five_fold_cv
+  cv_folds: 5
+  ridge_lambdas: [0.1, 1.0, 10.0, 100.0, 1000.0, 2000.0, 5000.0, 10000.0]
+  rank:
+  activated_only: true
+  normalize_decoder: true
+  min_feature_activations: 10
+  min_feature_r2: -1.0
+  metric_batch_size: 1024
+  bootstrap_samples: 1000
+  bootstrap_seed: 42
+  transport_efficiency:
+    enabled: true
+    policies: [same_token, attention_topk]
+    rank_start: 1
+    rank_step: 50
+    layer_pairs: ["9:10", "7:10", "3:10", "0:10"]
+  layer_pairs:
+    - {source_layer: 9, target_layer: 10, leap: 1}
+    - {source_layer: 8, target_layer: 10, leap: 2}
+    - {source_layer: 7, target_layer: 10, leap: 3}
+    - {source_layer: 6, target_layer: 10, leap: 4}
+    - {source_layer: 5, target_layer: 10, leap: 5}
+    - {source_layer: 4, target_layer: 10, leap: 6}
+    - {source_layer: 3, target_layer: 10, leap: 7}
+    - {source_layer: 2, target_layer: 10, leap: 8}
+    - {source_layer: 1, target_layer: 10, leap: 9}
+    - {source_layer: 0, target_layer: 10, leap: 10}
+    - {source_layer: 19, target_layer: 20, leap: 1}
+    - {source_layer: 18, target_layer: 20, leap: 2}
+    - {source_layer: 17, target_layer: 20, leap: 3}
+    - {source_layer: 16, target_layer: 20, leap: 4}
+    - {source_layer: 15, target_layer: 20, leap: 5}
+    - {source_layer: 14, target_layer: 20, leap: 6}
+    - {source_layer: 13, target_layer: 20, leap: 7}
+    - {source_layer: 12, target_layer: 20, leap: 8}
+    - {source_layer: 11, target_layer: 20, leap: 9}
+    - {source_layer: 10, target_layer: 20, leap: 10}
+  policies:
+    - name: same_token
+      top_k: 1
+      input_mode: weighted_sum
+    - name: previous_token
+      top_k: 1
+      input_mode: weighted_sum
+    - name: attention_top1
+      top_k: 1
+      input_mode: weighted_sum
+    - name: attention_topk
+      top_k: 3
+      input_mode: weighted_sum
+    - name: random_topk
+      top_k: 3
+      input_mode: weighted_sum
+      random_seed: 42
+    - name: shuffled_attention_topk
+      top_k: 3
+      input_mode: weighted_sum
+      random_seed: 42
+    - name: attention_value_proxy_topk
+      routing_policy: attribution_topk
+      top_k: 3
+      input_mode: weighted_sum
+    - name: attention_topk_concat
+      routing_policy: attention_topk
+      top_k: 3
+      max_sources: 3
+      input_mode: concat
+      ridge_lambdas: [100.0, 1000.0, 5000.0]
+
+live_causal:
+  model_name: google/gemma-2-2b
+  activation_dir_path: artifacts/gemma2_2b_slimpajama_250k
+  device: cuda
+  dtype: float32
+  split_name: causal
+  num_sequences: 100
+  batch_size: 2
+  position_counts: [1, 5, all]
+  position_repeats: 3
+  position_seed: 17
+  normalize_weights: true
+  exclude_self: false
+  allow_negative_scores: false
+  causal_only: true
+  runs:
+    - {source_layer: 9, target_layer: 10, policy: same_token}
+    - {source_layer: 9, target_layer: 10, policy: attention_topk}
+    - {source_layer: 8, target_layer: 10, policy: same_token}
+    - {source_layer: 8, target_layer: 10, policy: attention_topk}
+    - {source_layer: 7, target_layer: 10, policy: same_token}
+    - {source_layer: 7, target_layer: 10, policy: attention_topk}
+    - {source_layer: 6, target_layer: 10, policy: same_token}
+    - {source_layer: 6, target_layer: 10, policy: attention_topk}
+    - {source_layer: 5, target_layer: 10, policy: same_token}
+    - {source_layer: 5, target_layer: 10, policy: attention_topk}
+    - {source_layer: 4, target_layer: 10, policy: same_token}
+    - {source_layer: 4, target_layer: 10, policy: attention_topk}
+    - {source_layer: 3, target_layer: 10, policy: same_token}
+    - {source_layer: 3, target_layer: 10, policy: attention_topk}
+    - {source_layer: 2, target_layer: 10, policy: same_token}
+    - {source_layer: 2, target_layer: 10, policy: attention_topk}
+    - {source_layer: 1, target_layer: 10, policy: same_token}
+    - {source_layer: 1, target_layer: 10, policy: attention_topk}
+    - {source_layer: 0, target_layer: 10, policy: same_token}
+    - {source_layer: 0, target_layer: 10, policy: attention_topk}
+
+report:
+  output_dir: outputs/real/report

@@ -3,23 +3,27 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import numpy as np
 import torch
 
 logger = logging.getLogger(__name__)
+PositionSelection = list[int] | Mapping[int, list[int]] | None
+
+
+def _positions_for_sample(selection: PositionSelection, sample_idx: int) -> list[int] | None:
+    if selection is None:
+        return None
+    if isinstance(selection, Mapping):
+        if sample_idx not in selection:
+            raise KeyError(f"Missing position selection for sample {sample_idx}")
+        return selection[sample_idx]
+    return selection
 
 
 class RoutedTransportHook:
-    """
-    Hook for routed transport interventions.
-
-    patch_lookup maps:
-        sample_idx -> np.ndarray of shape [seq_len, d_model]
-
-    sample_idx_lookup must align with the batch order used during evaluation.
-    """
+    """Patch target-layer residuals with precomputed transported vectors."""
 
     def __init__(
         self,
@@ -27,7 +31,7 @@ class RoutedTransportHook:
         target_layer: str,
         patch_lookup: dict[int, np.ndarray],
         sample_idx_lookup: list[int],
-        target_j_positions: Optional[list[int]] = None,
+        target_j_positions: PositionSelection = None,
     ):
         self.name = name
         self.target_layer = target_layer
@@ -37,7 +41,6 @@ class RoutedTransportHook:
         self.target_hook_handle = None
 
     def apply(self, model: Any):
-        """Apply target-layer patch hook."""
         target_module = model
         for attr in self.target_layer.split("."):
             target_module = getattr(target_module, attr)
@@ -51,79 +54,72 @@ class RoutedTransportHook:
                     hidden = output[0]
                     output_is_tuple = True
                 else:
-                    raise RuntimeError(
-                        f"Unsupported output type for routed transport: {type(output)}"
-                    )
+                    raise RuntimeError(f"Unsupported output type for routed transport: {type(output)}")
 
                 modified_hidden = hidden.clone()
-                batch_size = modified_hidden.shape[0]
-                seq_len = modified_hidden.shape[1]
-
-                if batch_size > len(self.sample_idx_lookup):
+                if modified_hidden.shape[0] != len(self.sample_idx_lookup):
                     raise RuntimeError(
-                        f"Batch size {batch_size} exceeds sample_idx_lookup size {len(self.sample_idx_lookup)}"
+                        f"Batch size {modified_hidden.shape[0]} does not match sample_idx_lookup size "
+                        f"{len(self.sample_idx_lookup)}"
                     )
-
-                for batch_pos in range(batch_size):
+                for batch_pos in range(modified_hidden.shape[0]):
                     sample_idx = int(self.sample_idx_lookup[batch_pos])
                     if sample_idx not in self.patch_lookup:
-                        continue
-
-                    patch_array = self.patch_lookup[sample_idx]
+                        raise KeyError(f"Missing transport patch for sample {sample_idx}")
+                    patch_array = np.asarray(self.patch_lookup[sample_idx], dtype=np.float32)
                     if patch_array.ndim != 2:
+                        raise RuntimeError(f"Patch array must be 2D [seq_len, d_model], got {patch_array.shape}")
+                    if patch_array.shape[1] != modified_hidden.shape[2]:
                         raise RuntimeError(
-                            f"Patch array must be 2D [seq_len, d_model], got {patch_array.shape}"
+                            f"Patch width {patch_array.shape[1]} does not match hidden width "
+                            f"{modified_hidden.shape[2]}"
                         )
-
-                    patch_seq_len = min(seq_len, patch_array.shape[0])
-                    patch_tensor = torch.from_numpy(
-                        patch_array[:patch_seq_len].astype(np.float32)
-                    ).to(modified_hidden.device)
-                    patch_tensor = patch_tensor.to(modified_hidden.dtype)
-
-                    if self.target_j_positions is None:
+                    patch_seq_len = min(modified_hidden.shape[1], patch_array.shape[0])
+                    patch_tensor = torch.from_numpy(patch_array[:patch_seq_len]).to(
+                        device=modified_hidden.device,
+                        dtype=modified_hidden.dtype,
+                    )
+                    positions = _positions_for_sample(self.target_j_positions, sample_idx)
+                    if positions is None:
                         modified_hidden[batch_pos, :patch_seq_len, :] = patch_tensor
                     else:
-                        for j_position in self.target_j_positions:
-                            if j_position < patch_seq_len:
-                                modified_hidden[batch_pos, j_position, :] = patch_tensor[
-                                    j_position
-                                ]
+                        for position in positions:
+                            if position < 0 or position >= patch_seq_len:
+                                raise IndexError(
+                                    f"Patch position {position} is outside [0, {patch_seq_len - 1}]"
+                                )
+                            modified_hidden[batch_pos, position, :] = patch_tensor[position]
 
                 if not output_is_tuple:
                     return modified_hidden
-
                 modified_output = list(output)
                 modified_output[0] = modified_hidden
                 return tuple(modified_output)
+            except Exception as exc:
+                logger.exception("Routed transport operation failed: %s", exc)
+                raise RuntimeError("Routed transport operation failed") from exc
 
-            except Exception as e:
-                logger.exception("Routed transport operation failed: %s.", e)
-                raise RuntimeError("Routed transport operation failed") from e
-
-        self.target_hook_handle = target_module.register_forward_hook(
-            routed_transport_hook
-        )
-        logger.info(
-            "Applied routed transport hook '%s' to target layer '%s'",
-            self.name,
-            self.target_layer,
-        )
+        self.target_hook_handle = target_module.register_forward_hook(routed_transport_hook)
 
     def remove(self):
-        """Remove the hook."""
         if self.target_hook_handle:
             self.target_hook_handle.remove()
             self.target_hook_handle = None
 
 
 class FullSequenceZeroHook:
-    """
-    Hook that zeros out the full residual stream sequence at a target layer.
-    """
+    """Zero all or selected target-layer residual positions."""
 
-    def __init__(self, layer_name: str):
+    def __init__(
+        self,
+        layer_name: str,
+        *,
+        sample_idx_lookup: list[int] | None = None,
+        target_j_positions: PositionSelection = None,
+    ):
         self.layer_name = layer_name
+        self.sample_idx_lookup = sample_idx_lookup
+        self.target_j_positions = target_j_positions
         self.hook_handle = None
 
     def apply(self, model: Any):
@@ -134,19 +130,46 @@ class FullSequenceZeroHook:
         def zero_hook(module, input_tensors, output):
             try:
                 if isinstance(output, torch.Tensor):
-                    return torch.zeros_like(output)
-                if isinstance(output, tuple):
-                    modified_output = list(output)
-                    modified_output[0] = torch.zeros_like(output[0])
-                    return tuple(modified_output)
-                logger.warning("Unsupported output type: %s", type(output))
-                return output
-            except Exception as e:
-                logger.exception("Full zero operation failed: %s.", e)
-                raise RuntimeError("Full zero operation failed") from e
+                    hidden = output
+                    output_is_tuple = False
+                elif isinstance(output, tuple):
+                    hidden = output[0]
+                    output_is_tuple = True
+                else:
+                    logger.warning("Unsupported output type: %s", type(output))
+                    return output
+
+                if self.target_j_positions is None:
+                    modified_hidden = torch.zeros_like(hidden)
+                else:
+                    if self.sample_idx_lookup is None:
+                        raise RuntimeError("sample_idx_lookup is required for position-specific zeroing")
+                    if hidden.shape[0] != len(self.sample_idx_lookup):
+                        raise RuntimeError(
+                            f"Batch size {hidden.shape[0]} does not match sample_idx_lookup size "
+                            f"{len(self.sample_idx_lookup)}"
+                        )
+                    modified_hidden = hidden.clone()
+                    for batch_pos in range(hidden.shape[0]):
+                        sample_idx = int(self.sample_idx_lookup[batch_pos])
+                        positions = _positions_for_sample(self.target_j_positions, sample_idx) or []
+                        for position in positions:
+                            if position < 0 or position >= hidden.shape[1]:
+                                raise IndexError(
+                                    f"Zero position {position} is outside [0, {hidden.shape[1] - 1}]"
+                                )
+                            modified_hidden[batch_pos, position, :] = 0
+
+                if not output_is_tuple:
+                    return modified_hidden
+                modified_output = list(output)
+                modified_output[0] = modified_hidden
+                return tuple(modified_output)
+            except Exception as exc:
+                logger.exception("Zero operation failed: %s", exc)
+                raise RuntimeError("Zero operation failed") from exc
 
         self.hook_handle = target_module.register_forward_hook(zero_hook)
-        logger.info("Applied full-sequence zero hook to layer '%s'", self.layer_name)
 
     def remove(self):
         if self.hook_handle:
@@ -158,12 +181,8 @@ def create_routed_transport_hook(
     target_layer: str,
     patch_lookup: dict[int, np.ndarray],
     sample_idx_lookup: list[int],
-    j_positions: Optional[list[int]] = None,
+    j_positions: PositionSelection = None,
 ) -> RoutedTransportHook:
-    """
-    Create a routed transport hook that injects precomputed transported residuals
-    at the target layer.
-    """
     return RoutedTransportHook(
         name="routed_transport_intervention",
         target_layer=target_layer,
@@ -180,20 +199,25 @@ def create_routed_transport_hook_family(
     js: list[list[int]],
     prefix: str,
 ) -> dict[str, RoutedTransportHook]:
-    """
-    Create a family of routed transport hooks for different target position sets.
-    """
-    hooks = {}
-    for j in js:
-        hooks[f"{prefix}_{str(j)}"] = create_routed_transport_hook(
+    return {
+        f"{prefix}_{str(positions)}": create_routed_transport_hook(
             target_layer=target_layer,
             patch_lookup=patch_lookup,
             sample_idx_lookup=sample_idx_lookup,
-            j_positions=j,
+            j_positions=positions,
         )
-    return hooks
+        for positions in js
+    }
 
 
-def create_full_sequence_zero_hook(layer_name: str) -> FullSequenceZeroHook:
-    """Create a hook that zeros the full sequence residual stream at a target layer."""
-    return FullSequenceZeroHook(layer_name)
+def create_full_sequence_zero_hook(
+    layer_name: str,
+    *,
+    sample_idx_lookup: list[int] | None = None,
+    j_positions: PositionSelection = None,
+) -> FullSequenceZeroHook:
+    return FullSequenceZeroHook(
+        layer_name,
+        sample_idx_lookup=sample_idx_lookup,
+        target_j_positions=j_positions,
+    )

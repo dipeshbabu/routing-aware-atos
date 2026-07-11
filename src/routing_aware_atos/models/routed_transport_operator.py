@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from routing_aware_atos.models.transport_operator import TransportOperator, TransportOperatorConfig
+from routing_aware_atos.provenance import sha256_file
 from routing_aware_atos.utils.io import save_json
 
 
@@ -17,10 +18,12 @@ class RoutedTransportOperator(TransportOperator):
     def save_bundle(self, output_dir: str | Path, *, extra_metadata: Dict[str, Any] | None = None) -> None:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        self.save(output_dir / "operator.npz")
+        operator_path = output_dir / "operator.npz"
+        self.save(operator_path)
         payload = self.metadata()
         payload["routing_policy_name"] = self.routing_policy_name
         payload["route_summary"] = self.route_summary
+        payload["operator_sha256"] = sha256_file(operator_path)
         if extra_metadata:
             payload.update(extra_metadata)
         save_json(output_dir / "metadata.json", payload)

@@ -14,7 +14,7 @@ from routing_aware_atos.activation_loader import ActivationLoader
 from routing_aware_atos.data.mock_cache import make_mock_samples
 from routing_aware_atos.data.routed_dataset import ConcatenatedRoutedActivationDataset, RoutedActivationDataset
 from routing_aware_atos.routing.factory import build_routing_policy
-from routing_aware_atos.utils.io import load_cached_samples, load_yaml, save_json, save_npz
+from routing_aware_atos.utils.io import load_yaml, save_json, save_npz
 
 
 def main() -> None:
@@ -30,20 +30,29 @@ def main() -> None:
         exclude_self=cfg.get("exclude_self", False),
         allow_negative_scores=cfg.get("allow_negative_scores", False),
         random_seed=cfg.get("random_seed", 0),
+        causal_only=cfg.get("causal_only", False),
     )
 
     if cfg.get("activation_dir_path"):
-        loader = ActivationLoader(activation_dir_path=cfg["activation_dir_path"])
-        samples = list(
-            loader.iter_cached_samples(
+        with ActivationLoader(activation_dir_path=cfg["activation_dir_path"]) as loader:
+            samples = list(loader.iter_cached_samples(
                 idx_list=cfg.get("idx_list"),
                 layer_indices=[cfg["source_layer"], cfg["target_layer"]],
                 attention_layer_pairs=[(cfg["source_layer"], cfg["target_layer"])] if policy.requires_attention else None,
                 attribution_layer_pairs=[(cfg["source_layer"], cfg["target_layer"])] if policy.requires_attribution else None,
-            )
-        )
+                split_name=cfg.get("split_name"),
+                strict=True,
+            ))
     elif cfg.get("cache_path"):
-        samples = load_cached_samples(cfg["cache_path"])
+        with ActivationLoader(samples_path=cfg["cache_path"]) as loader:
+            samples = list(loader.iter_cached_samples(
+                idx_list=cfg.get("idx_list"),
+                layer_indices=[cfg["source_layer"], cfg["target_layer"]],
+                attention_layer_pairs=[(cfg["source_layer"], cfg["target_layer"])] if policy.requires_attention else None,
+                attribution_layer_pairs=[(cfg["source_layer"], cfg["target_layer"])] if policy.requires_attribution else None,
+                split_name=cfg.get("split_name"),
+                strict=True,
+            ))
     else:
         samples = make_mock_samples(
             num_samples=cfg.get("num_samples", 2),

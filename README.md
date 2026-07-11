@@ -15,11 +15,46 @@ It supports:
 - feature case study export
 - full multi-policy experiment sweeps
 
-The intended real-model setup is:
+The intended paper-scale model setup is:
 
 - base model: **Gemma 2 2B**
 - SAE family: **Gemma Scope**
 - default residual SAE release: **`gemma-scope-2b-pt-res-canonical`**
+
+## Paper-Scale Dataset And Protocol
+
+The paper-scale workflow uses **`cerebras/SlimPajama-627B`**, streamed from Hugging Face. It does not use generated prompts or the mock cache.
+
+The checked-in paper-scale configuration, `configs/real/gemma2_2b_slimpajama.yaml`, follows the paper protocol:
+
+- 250,000 deterministically shuffled SlimPajama tokens for transport operators
+- exact 60% train / 20% validation / 20% test token budgets
+- a disjoint causal split containing 100 full sequences of 256 tokens from SlimPajama's test split
+- 120,000 training tokens for Gemma Scope feature selection
+- 819 selected features per target layer (the released selector's integer 5% cutoff)
+- Gemma 2 2B post-layer residuals aligned to Gemma Scope layer indices
+- float32 model computation and activation storage, matching the paper setup
+- target layers 10 and 20 with the complete `k = 1..10` sweep
+- same-token, routing-aware, random, shuffled-attention, attention-value proxy, and concatenated Top-K policies
+- causal-prefix source constraints for every paper-scale routing policy, preventing future-token leakage
+- live Gemma vocabulary-focus and candidate-feature causal-ablation scoring
+- five-fold ridge grid search on training data, followed by untouched validation and test reporting
+
+The source dataset is [Cerebras SlimPajama-627B](https://huggingface.co/datasets/cerebras/SlimPajama-627B), released under Apache 2.0. The paper reports the same dataset and token counts in Appendix B.
+
+Reproducibility note: the paper names `cerebras/SlimPajama-627B`, while the authors' currently published code config points to `DKYoon/SlimPajama-6B`. This repository follows the paper text by default and pins the model and dataset revisions. The manifest also records the seed, shuffle buffer, config hash, software versions, collector source hash, and a SHA-256 digest for every activation shard. A strict released-code replication can change `dataset.name` to `DKYoon/SlimPajama-6B` and pin its commit before collection; it must use a separate `collection.output_dir` so the two corpora cannot be mixed accidentally.
+
+### Registered Replication Differences
+
+The checked-in paper-scale configuration produces actual model results, but it is not presented as bit-for-bit reproduction of the released repository:
+
+- Feature scoring uses the released score weights, vocabulary projection, and live candidate ablations. Its bounded-memory coherence estimate counts active-token associations in 2,048 deterministic hash bins; the released selector keeps top-activation token dictionaries per chunk.
+- The target-layer sweep covers `k = 1..10`; the transport-efficiency rank sweep uses the paper's displayed `k = 1, 3, 7, 10` offsets.
+- The paper's all-target-layer heatmap is not part of the default run; the default evaluates the two preregistered SAE target layers, 10 and 20.
+- `attention_value_proxy_topk` is explicitly a norm-weighted attention heuristic, not gradient attribution.
+- Causal perplexity examples come from SlimPajama's disjoint test split after the first 10,000 examples, without shuffling. The released dataset config points to its training split.
+
+These choices, immutable revisions, artifact hashes, and stage-specific implementation hashes are written into output artifacts. Use a separate output directory for any protocol variant.
 
 ## Install
 
@@ -33,7 +68,7 @@ Install test dependencies:
 uv sync --extra test
 ```
 
-Optional real-model collection dependencies:
+Optional paper-scale collection dependencies:
 
 ```bash
 uv sync --extra real-model
@@ -42,7 +77,13 @@ uv sync --extra real-model
 For the full research environment:
 
 ```bash
-uv sync --extra test --extra real-model --extra gemma-scope
+uv sync --frozen --extra test --extra real-model --extra gemma-scope
+```
+
+Gemma 2 is gated. Accept its Hugging Face license and authenticate before collection:
+
+```bash
+hf auth login
 ```
 
 Run tests:
@@ -50,6 +91,57 @@ Run tests:
 ```bash
 uv run pytest -q
 ```
+
+## Paper-Scale A100 Experiment
+
+Run the complete resumable workflow with one command:
+
+```bash
+uv run python scripts/run_real_pipeline.py \
+  --config configs/real/gemma2_2b_slimpajama.yaml \
+  --stage all
+```
+
+The stages can also be run separately. This is useful on rented hardware because every expensive stage writes resumable artifacts:
+
+```bash
+uv run python scripts/run_real_pipeline.py --stage collect
+uv run python scripts/run_real_pipeline.py --stage sae
+uv run python scripts/run_real_pipeline.py --stage features
+uv run python scripts/run_real_pipeline.py --stage experiments
+uv run python scripts/run_real_pipeline.py --stage causal
+uv run python scripts/run_real_pipeline.py --stage report
+```
+
+Activation collection resumes at verified shard boundaries after interruption. Feature, operator, and causal stages skip completed outputs unless `--force` is supplied.
+
+Check a stage before spending GPU time:
+
+```bash
+uv run python scripts/preflight_real_experiment.py \
+  --config configs/real/gemma2_2b_slimpajama.yaml \
+  --stage collect
+```
+
+For the first A100 validation, run only one layer pair and the core baseline/comparison after collection, SAE export, and feature selection:
+
+```bash
+uv run python scripts/run_real_pipeline.py --stage experiments \
+  --pair 9:10 \
+  --policy same_token \
+  --policy attention_topk
+```
+
+Paper-scale outputs are written under:
+
+- `artifacts/gemma2_2b_slimpajama_250k/`: chunked residual, attention, split, and token cache
+- `artifacts/sae/`: exported Gemma Scope encoder/decoder artifacts
+- `artifacts/features/`: selected feature IDs and selection statistics
+- `outputs/real/runs/`: trained operators and held-out metrics
+- `outputs/real/live_causal/`: clean, zero-intervened, and ATO-restored perplexity results
+- `outputs/real/report/`: validated CSV tables and predictive, efficiency, and causal plots
+
+The paper-scale pipeline uses the model itself for causal logits and perplexity. It does not require the placeholder `gemma2_2b_readout.npz` used by the lightweight static demos.
 
 ## Core Data Model
 
@@ -63,6 +155,8 @@ The routed pipeline uses a cached sample format with:
 The matrix row for target position `i` contains source-token routing scores for that target.
 
 ## Quickstart
+
+This section exercises individual components and mock-compatible configs. Use **Paper-Scale A100 Experiment** above for paper-scale results.
 
 Build baseline pairs:
 
@@ -117,24 +211,26 @@ If you want to mirror the original paper setup more closely, use:
 - cached activations collected from **Gemma 2 2B**
 - residual-stream SAEs from **Gemma Scope**
 
-Collect Hugging Face residual / attention caches:
+The prompt-file collector command below is retained for small custom datasets. The actual SlimPajama workflow is configured and collected by `scripts/run_real_pipeline.py`.
+
+Collect a custom prompt-file residual / attention cache:
 
 ```bash
 uv run python scripts/collect_hf_activations.py --config configs/collection/hf_gemma2_2b.yaml
 ```
 
-This repo expects SAE decoders in `.npz` format with a `decoder` array. You can export one from Gemma Scope with:
+This repo expects SAE artifacts in `.npz` format. The exporter now stores decoder, encoder, biases, and JumpReLU threshold when available:
 
 ```bash
 uv run python scripts/export_gemma_scope_decoder.py \
   --release gemma-scope-2b-pt-res-canonical \
   --sae-id layer_20/width_16k/canonical \
-  --output outputs/sae/gemma_scope_layer20_width16k_decoder.npz
+  --output artifacts/sae/gemma_scope_layer20_width16k.npz
 ```
 
 The script also writes a JSON sidecar with the release and SAE metadata.
 
-After that, point your eval / causal configs at the exported decoder instead of the mock decoder.
+The paper-scale runner resolves target-layer SAE artifacts directly from the master configuration.
 
 ## Recommended Experiment Order
 
@@ -230,6 +326,8 @@ uv run python scripts/export_feature_case_studies.py --config configs/eval.yaml
 
 ## Full Sweep
 
+The command in this section is the lightweight cached-config sweep. It assumes all paths already exist and is not the paper-scale data collector or live causal pipeline.
+
 Run the full multi-policy workflow with:
 
 ```bash
@@ -276,7 +374,7 @@ Evaluation configs:
 ## Notes
 
 - The root `eval.yaml` and `causal_eval.yaml` provide shared routing/taxonomy defaults.
-- The root configs now default to the **Gemma 2 2B + Gemma Scope** target setup as metadata, but the repo still remains model-agnostic at runtime until you provide real cached activations, a real decoder export, and a real readout export.
+- The legacy root configs remain model-agnostic and require user-provided artifacts. The paper-scale pipeline above collects Gemma activations, exports Gemma Scope SAEs, and evaluates causal logits directly from Gemma; only the lightweight static demos use a readout export.
 - The taxonomy builder accepts either:
   - explicit `runs:` payloads, or
   - `results_dir` plus `taxonomy_policies`

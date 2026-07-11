@@ -1,4 +1,5 @@
 .pytest_cache/
+.test-tmp*/
 __pycache__/
 *.py[cod]
 *.pyo
@@ -25,6 +26,7 @@ htmlcov/
 .nox/
 
 outputs/
+artifacts/
 
 .idea/
 .vscode/

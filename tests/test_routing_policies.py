@@ -72,3 +72,28 @@ def test_shuffled_attention_topk_requires_attention_but_breaks_alignment():
     assert route_shuffled.score_type == "shuffled_attention_topk"
     assert len(route_shuffled.source_ids) == 3
     assert route_shuffled.source_ids != route_attention.source_ids
+
+
+def test_causal_only_routes_never_use_future_positions():
+    sample = make_mock_samples(num_samples=1, seq_len=8)[0]
+    policies = [
+        build_routing_policy("attention_topk", top_k=3, causal_only=True),
+        build_routing_policy("attribution_topk", top_k=3, causal_only=True),
+        build_routing_policy("random_topk", top_k=3, random_seed=5, causal_only=True),
+        build_routing_policy(
+            "shuffled_attention_topk",
+            top_k=3,
+            random_seed=5,
+            causal_only=True,
+        ),
+    ]
+
+    for policy in policies:
+        route = policy.select_sources(sample, 3, 10, 12)
+        assert all(source_position <= 3 for source_position in route.source_ids)
+
+
+def test_causal_only_next_token_control_falls_back_to_current_position():
+    sample = make_mock_samples(num_samples=1, seq_len=5)[0]
+    policy = build_routing_policy("next_token", causal_only=True)
+    assert policy.select_sources(sample, 2, 10, 12).source_ids == [2]

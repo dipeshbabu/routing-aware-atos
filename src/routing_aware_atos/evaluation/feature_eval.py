@@ -26,6 +26,11 @@ def _evaluate_operator_arrays(
     operator_path: str | Path | None = None,
     pairs_path: str | Path | None = None,
     routing_info: Dict[str, Any] | None = None,
+    sae_arrays: Dict[str, np.ndarray] | None = None,
+    activated_only: bool = False,
+    min_feature_activations: int = 1,
+    compute_device: str = "cpu",
+    metric_batch_size: int = 2048,
 ) -> Dict[str, Any]:
     Y_pred = operator.predict(X)
     feature_metrics = evaluate_feature_space(
@@ -33,6 +38,11 @@ def _evaluate_operator_arrays(
         Y_pred=Y_pred,
         decoder_matrix=decoder,
         feature_ids=feature_ids,
+        sae_arrays=sae_arrays,
+        activated_only=activated_only,
+        min_activations=min_feature_activations,
+        compute_device=compute_device,
+        batch_size=metric_batch_size,
     )
     summary = summarize_feature_metrics(feature_metrics)
     residual_metrics = operator.evaluate(X, Y)
@@ -44,6 +54,7 @@ def _evaluate_operator_arrays(
         "residual_metrics": residual_metrics,
         "feature_summary": summary,
         "feature_metrics": feature_metrics.to_dict(),
+        "activated_only": bool(activated_only),
     }
     if routing_info:
         payload.update(routing_info)
@@ -60,12 +71,17 @@ def evaluate_operator_in_feature_space(
     feature_ids: Iterable[int] | None = None,
     output_path: str | Path | None = None,
     split_name: str = "eval",
+    activated_only: bool = False,
+    min_feature_activations: int = 1,
+    compute_device: str = "cpu",
+    metric_batch_size: int = 2048,
 ) -> Dict[str, Any]:
     operator = TransportOperator.load(operator_path)
     pairs = load_npz(pairs_path)
     X = np.asarray(pairs["X"], dtype=np.float32)
     Y = np.asarray(pairs["Y"], dtype=np.float32)
-    decoder = np.asarray(load_npz(decoder_path)["decoder"], dtype=np.float32)
+    sae_arrays = load_npz(decoder_path)
+    decoder = np.asarray(sae_arrays["decoder"], dtype=np.float32)
 
     payload = _evaluate_operator_arrays(
         operator,
@@ -77,6 +93,11 @@ def evaluate_operator_in_feature_space(
         split_name=split_name,
         operator_path=operator_path,
         pairs_path=pairs_path,
+        sae_arrays=sae_arrays,
+        activated_only=activated_only,
+        min_feature_activations=min_feature_activations,
+        compute_device=compute_device,
+        metric_batch_size=metric_batch_size,
     )
     payload["decoder_path"] = str(decoder_path)
     if output_path is not None:
@@ -98,18 +119,25 @@ def evaluate_operator_from_cached_samples(
     exclude_self: bool = False,
     allow_negative_scores: bool = False,
     random_seed: int = 0,
+    causal_only: bool = False,
     input_mode: str = "weighted_sum",
     max_sources: int | None = None,
     include_positions: list[int] | None = None,
     feature_ids: Iterable[int] | None = None,
     output_path: str | Path | None = None,
     split_name: str = "eval",
+    filter_split: bool = False,
+    activated_only: bool = False,
+    min_feature_activations: int = 1,
+    compute_device: str = "cpu",
+    metric_batch_size: int = 2048,
     num_samples: int = 2,
     seq_len: int = 6,
     d_model: int = 4,
 ) -> Dict[str, Any]:
     operator = TransportOperator.load(operator_path)
-    decoder = np.asarray(load_npz(decoder_path)["decoder"], dtype=np.float32)
+    sae_arrays = load_npz(decoder_path)
+    decoder = np.asarray(sae_arrays["decoder"], dtype=np.float32)
     policy = build_routing_policy(
         routing_policy,
         top_k=top_k,
@@ -117,30 +145,33 @@ def evaluate_operator_from_cached_samples(
         exclude_self=exclude_self,
         allow_negative_scores=allow_negative_scores,
         random_seed=random_seed,
+        causal_only=causal_only,
     )
 
     if activation_dir_path:
-        loader = ActivationLoader(activation_dir_path=activation_dir_path)
-        idx_list = list(range(len(loader)))
-        samples = list(
-            loader.iter_cached_samples(
-                idx_list=idx_list,
-                layer_indices=[source_layer, target_layer],
-                attention_layer_pairs=[(source_layer, target_layer)] if policy.requires_attention else None,
-                attribution_layer_pairs=[(source_layer, target_layer)] if policy.requires_attribution else None,
+        with ActivationLoader(activation_dir_path=activation_dir_path) as loader:
+            idx_list = loader.indices_for_split(split_name) if filter_split else list(range(len(loader)))
+            samples = list(
+                loader.iter_cached_samples(
+                    idx_list=idx_list,
+                    layer_indices=[source_layer, target_layer],
+                    attention_layer_pairs=[(source_layer, target_layer)] if policy.requires_attention else None,
+                    attribution_layer_pairs=[(source_layer, target_layer)] if policy.requires_attribution else None,
+                    strict=True,
+                )
             )
-        )
     elif cache_path:
-        loader = ActivationLoader(samples_path=cache_path)
-        idx_list = list(range(len(loader)))
-        samples = list(
-            loader.iter_cached_samples(
-                idx_list=idx_list,
-                layer_indices=[source_layer, target_layer],
-                attention_layer_pairs=[(source_layer, target_layer)] if policy.requires_attention else None,
-                attribution_layer_pairs=[(source_layer, target_layer)] if policy.requires_attribution else None,
+        with ActivationLoader(samples_path=cache_path) as loader:
+            idx_list = loader.indices_for_split(split_name) if filter_split else list(range(len(loader)))
+            samples = list(
+                loader.iter_cached_samples(
+                    idx_list=idx_list,
+                    layer_indices=[source_layer, target_layer],
+                    attention_layer_pairs=[(source_layer, target_layer)] if policy.requires_attention else None,
+                    attribution_layer_pairs=[(source_layer, target_layer)] if policy.requires_attribution else None,
+                    strict=True,
+                )
             )
-        )
     else:
         samples = make_mock_samples(num_samples=num_samples, seq_len=seq_len, d_model=d_model)
 
@@ -183,6 +214,11 @@ def evaluate_operator_from_cached_samples(
         operator_path=operator_path,
         pairs_path=None,
         routing_info=routing_info,
+        sae_arrays=sae_arrays,
+        activated_only=activated_only,
+        min_feature_activations=min_feature_activations,
+        compute_device=compute_device,
+        metric_batch_size=metric_batch_size,
     )
     if output_path is not None:
         save_json(output_path, payload)
